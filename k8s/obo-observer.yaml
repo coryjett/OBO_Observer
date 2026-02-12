@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obo-observer
+---
+# List pods in obo-observer so client IP (src.addr) can be resolved to "obo-observer"
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obo-observer-pods-reader
+  namespace: obo-observer
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obo-observer-pods-reader
+  namespace: obo-observer
+subjects:
+  - kind: ServiceAccount
+    name: obo-observer
+    namespace: obo-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obo-observer-pods-reader
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obo-observer
+  namespace: obo-observer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obo-observer-logs-reader
+  namespace: agentgateway-system
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obo-observer-logs-reader
+  namespace: agentgateway-system
+subjects:
+  - kind: ServiceAccount
+    name: obo-observer
+    namespace: obo-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obo-observer-logs-reader
+---
+# Read proxy access logs from the Gateway that serves MCP (default/enterprise-agentgateway)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obo-observer-logs-reader
+  namespace: default
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: ["agentgateway.dev"]
+    resources: ["agentgatewaybackends"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obo-observer-logs-reader
+  namespace: default
+subjects:
+  - kind: ServiceAccount
+    name: obo-observer
+    namespace: obo-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obo-observer-logs-reader
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obo-observer
+  namespace: obo-observer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: obo-observer
+  template:
+    metadata:
+      labels:
+        app: obo-observer
+    spec:
+      serviceAccountName: obo-observer
+      containers:
+        - name: obo-observer
+          image: obo-observer:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: LOG_MODE
+              value: kubernetes
+            - name: K8S_NAMESPACE
+              value: default
+            - name: K8S_POD_LABEL_SELECTOR
+              value: app.kubernetes.io/name=enterprise-agentgateway
+            - name: K8S_TAIL_LINES
+              value: "500"
+            - name: EVENT_BUFFER_SIZE
+              value: "800"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: obo-observer
+  namespace: obo-observer
+spec:
+  selector:
+    app: obo-observer
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP

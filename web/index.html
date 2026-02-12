@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agentgateway OBO Observer</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">OBO Observer</div>
+      <div id="status" class="status status-warn">Connecting...</div>
+    </header>
+
+    <div id="wf-status" class="workflow-status-toast" aria-live="polite"></div>
+
+    <main class="layout">
+      <section class="card contexts">
+        <div class="card-title-row">
+          <div class="card-title">Contexts Hit</div>
+          <button type="button" id="contexts-clear" class="btn-clear">Clear</button>
+        </div>
+        <ul id="context-list" class="context-list"></ul>
+      </section>
+
+      <section class="right-pane">
+        <section class="card trace">
+          <div class="card-title">Trace Graph</div>
+          <div class="trace-graph-wrap" id="trace-graph-wrap">
+            <svg id="trace-svg" preserveAspectRatio="xMidYMid meet"></svg>
+          </div>
+        </section>
+
+        <section class="card tokens">
+          <details class="headers-details" id="headers-details">
+            <summary class="headers-summary">Headers</summary>
+            <p class="headers-help">All attributes parsed from the request log (as received by Agentgateway).</p>
+            <pre id="headers-display" class="headers-display">Select a context to view headers.</pre>
+            <div class="meta" id="event-meta">No event selected</div>
+          </details>
+
+          <div class="workflow">
+            <h3>Interactive OBO Flow</h3>
+            <p class="workflow-help">
+              Run the full flow in order: generate user JWT, exchange with STS, then call MCP backend and list tools.
+            </p>
+
+            <div class="workflow-config">
+              <details class="workflow-config-details">
+                <summary class="workflow-config-summary">OBO configuration</summary>
+                <div class="workflow-grid">
+                  <label>Keycloak URL <input id="wf-keycloak-url" value="http://keycloak.keycloak.svc.cluster.local:8080" placeholder="In-cluster: keycloak.keycloak…; local: localhost:8081" /></label>
+                  <label>Realm <input id="wf-realm" value="oidc-realm" /></label>
+                  <label>Client ID <input id="wf-client-id" value="agw-client" /></label>
+                  <label>Client Secret <input id="wf-client-secret" value="agw-client-secret" /></label>
+                  <label>Username <input id="wf-username" value="testuser" /></label>
+                  <label>Password <input id="wf-password" type="password" value="testuser" /></label>
+                  <label>STS URL <input id="wf-sts-url" value="http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777" placeholder="In-cluster: enterprise-agentgateway.agentgateway-system…" /></label>
+                  <label>Actor Token (optional) <input id="wf-actor-token" placeholder="Leave empty to use pod service account token" /></label>
+                  <label class="span2">MCP URL <input id="wf-mcp-url" value="http://enterprise-agentgateway.default.svc.cluster.local/mcp" placeholder="In-cluster: enterprise-agentgateway.default…/mcp" /></label>
+                </div>
+              </details>
+              <div class="workflow-actions">
+                <button id="wf-step-1" type="button">1) Generate User JWT</button>
+                <button id="wf-step-2" type="button">2) Exchange via STS</button>
+                <span class="workflow-mcp-row">
+                  <label for="wf-mcp-token-type" class="workflow-mcp-label">3) Call MCP tools/list</label>
+                  <select id="wf-mcp-token-type" class="workflow-mcp-select" aria-label="Token type for MCP call">
+                    <option value="obo-jwt" selected>OBO JWT</option>
+                    <option value="user-jwt">User JWT</option>
+                    <option value="no-jwt">No JWT</option>
+                  </select>
+                  <button id="wf-step-3" type="button">Call</button>
+                </span>
+                <button id="wf-clear-jwts" type="button" class="btn-clear-jwts">Clear User & OBO JWTs</button>
+              </div>
+              <div class="workflow-results">
+                <article>
+                  <h4>User JWT</h4>
+                  <pre id="wf-user-jwt">(not generated yet)</pre>
+                </article>
+                <article>
+                  <h4>OBO JWT</h4>
+                  <pre id="wf-obo-jwt">(not exchanged yet)</pre>
+                </article>
+              </div>
+              <div class="workflow-results workflow-results--tools-below">
+                <article class="span2">
+                  <h4>Tools Response</h4>
+                  <pre id="wf-tools">(tools/list not called yet)</pre>
+                </article>
+              </div>
+            </div>
+
+            <details class="agentgateway-logs-details">
+              <summary class="agentgateway-logs-summary">Agentgateway logs</summary>
+              <pre id="agentgateway-logs" class="agentgateway-logs-pre">Connecting…</pre>
+            </details>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
