@@ -66,12 +66,20 @@ Then **http://localhost:8080**. For other clusters: push image to a registry and
 
 ## Cleanup
 
+**OBO Observer only:**
+
 ```bash
 pkill -f "port-forward.*8080:80"
 kubectl delete -f k8s/obo-observer.yaml
 ```
 
-Full demo: delete namespaces `obo-observer`, `keycloak`, `agentgateway-system` (or `k3d cluster delete <name>`).
+**Demo environment** (Keycloak, Agentgateway, kagent-tools, Gateways):
+
+```bash
+helm uninstall kagent-tools -n default
+kubectl delete gateway,httproute,agentgatewaybackend,enterpriseagentgatewaypolicy -n default --all
+kubectl delete namespace keycloak agentgateway-system
+```
 
 ---
 
