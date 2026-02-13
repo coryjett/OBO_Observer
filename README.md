@@ -5,6 +5,8 @@ Visualizes Agentgateway proxy activity: contexts hit, trace graph (client → pr
 - **Log source:** `LOG_MODE=kubernetes` (default) or `LOG_MODE=file` with `LOG_FILE_PATH=/path/to/access.log`
 - **Parser:** JSON and key/value access logs
 
+![OBO Observer](images/image.png)
+
 ## Local run
 
 ```bash
