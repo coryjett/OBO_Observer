@@ -8,7 +8,10 @@ if [ -f "${SCRIPT_DIR}/.env" ]; then
   source "${SCRIPT_DIR}/.env"
   set +a
 fi
-KUBE_CONTEXT="${KUBE_CONTEXT:-k3d-oboobserver}"
+# Use current context unless KUBE_CONTEXT is set (e.g. in .env or export)
+if [ -z "${KUBE_CONTEXT:-}" ]; then
+  KUBE_CONTEXT="$(kubectl config current-context)"
+fi
 AGENTGATEWAY_LICENSE_KEY="${AGENTGATEWAY_LICENSE_KEY:-}"
 ENTERPRISE_AGENTGATEWAY_VERSION="${ENTERPRISE_AGENTGATEWAY_VERSION:-2.1.0}"
 GATEWAY_API_VERSION="${GATEWAY_API_VERSION:-v1.4.0}"
