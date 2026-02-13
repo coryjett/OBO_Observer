@@ -168,12 +168,20 @@ function renderContexts(selected) {
       : usedUserJwt
         ? '<span class="jwt-badge">User JWT</span>'
         : '';
+    let timeStr = "";
+    if (event.timestamp) {
+      const d = new Date(event.timestamp);
+      if (!Number.isNaN(d.getTime())) {
+        timeStr = d.toLocaleTimeString();
+      }
+    }
     button.innerHTML = `
       <div class="path-row">
         <span class="path">${escapeHtml(event.context || "(context missing)")}</span>
         ${badge}
       </div>
       <div class="small">${escapeHtml(event.resolvedClient || event.client || "unknown source")} → ${escapeHtml(event.resolvedBackendService || formatBackendDisplay(event.backendTarget) || event.route || "unknown destination")}</div>
+      <div class="small context-time">${escapeHtml(timeStr || "—")}</div>
     `;
 
     li.appendChild(button);

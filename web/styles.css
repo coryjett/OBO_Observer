@@ -281,6 +281,12 @@ body {
   font-size: 0.75rem;
 }
 
+.context-time {
+  margin-top: 2px;
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+
 .card.trace {
   flex: 0 0 auto;
 }
