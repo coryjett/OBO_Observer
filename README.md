@@ -22,15 +22,26 @@ docker build -t obo-observer:latest .
 
 ## Deploy to Kubernetes
 
-```bash
-kubectl apply -f k8s/obo-observer.yaml
-# kind:  kind load docker-image obo-observer:latest
-# k3d:   k3d image import obo-observer:latest -c <cluster-name>
-```
+1. Load the image into your cluster (manifest uses `imagePullPolicy: Never`):
 
-```bash
-kubectl port-forward -n obo-observer svc/obo-observer 8080:80
-```
+   ```bash
+   # k3d
+   k3d image import obo-observer:latest -c <cluster-name>
+   # kind
+   kind load docker-image obo-observer:latest
+   ```
+
+2. Apply the manifest:
+
+   ```bash
+   kubectl apply -f k8s/obo-observer.yaml
+   ```
+
+3. Port-forward and open the UI:
+
+   ```bash
+   kubectl port-forward -n obo-observer svc/obo-observer 8080:80
+   ```
 
 Then **http://localhost:8080**. For other clusters: push image to a registry and set `image` / `imagePullPolicy` in the manifest.
 
@@ -59,4 +70,3 @@ Full demo: delete namespaces `obo-observer`, `keycloak`, `agentgateway-system` (
 ---
 
 [AccessLog](https://docs.solo.io/agentgateway/2.1.x/reference/api/solo/#accesslog) · [OBO token exchange](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/obo/) · [MCP + OBO workshop](https://github.com/coryjett/solo-misc-workshops/blob/main/Agentgateway-OIDC-MCP-OBO.md)
-# OBO_Observer
