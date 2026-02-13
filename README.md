@@ -35,7 +35,13 @@ Optional env: `KUBE_CONTEXT`, `ENTERPRISE_AGENTGATEWAY_VERSION`, `GATEWAY_API_VE
 
 ## Deploy to Kubernetes
 
-1. Load the image into your cluster (manifest uses `imagePullPolicy: Never`):
+1. Create the `agentgateway-system` namespace if it doesn't exist (required by the manifest's RBAC):
+
+   ```bash
+   kubectl create namespace agentgateway-system
+   ```
+
+2. Load the image into your cluster (manifest uses `imagePullPolicy: Never`):
 
    ```bash
    # k3d
@@ -44,13 +50,13 @@ Optional env: `KUBE_CONTEXT`, `ENTERPRISE_AGENTGATEWAY_VERSION`, `GATEWAY_API_VE
    kind load docker-image obo-observer:latest
    ```
 
-2. Apply the manifest:
+3. Apply the manifest:
 
    ```bash
    kubectl apply -f k8s/obo-observer.yaml
    ```
 
-3. Port-forward and open the UI:
+4. Port-forward and open the UI:
 
    ```bash
    kubectl port-forward -n obo-observer svc/obo-observer 8080:80
