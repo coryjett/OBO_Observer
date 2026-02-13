@@ -20,6 +20,19 @@ docker build -t obo-observer:latest .
 # Apple Silicon:  docker build --build-arg TARGETARCH=arm64 -t obo-observer:latest .
 ```
 
+## Demo environment
+
+Prereqs: `kubectl`, `helm`, `curl`, `jq`. Set your Solo license key:
+
+```bash
+export AGENTGATEWAY_LICENSE_KEY="<your-license-key>"
+./demo_env.sh
+```
+
+Optional env: `KUBE_CONTEXT`, `ENTERPRISE_AGENTGATEWAY_VERSION`, `GATEWAY_API_VERSION`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`. See `.env.example`.
+
+**UI — OBO flow:** (1) Generate User JWT, (2) Exchange via STS, (3) Call MCP tools/list. UI uses in-cluster URLs when running in Kubernetes.
+
 ## Deploy to Kubernetes
 
 1. Load the image into your cluster (manifest uses `imagePullPolicy: Never`):
@@ -44,19 +57,6 @@ docker build -t obo-observer:latest .
    ```
 
 Then **http://localhost:8080**. For other clusters: push image to a registry and set `image` / `imagePullPolicy` in the manifest.
-
-## Demo environment
-
-Prereqs: `kubectl`, `helm`, `curl`, `jq`. Set your Solo license key:
-
-```bash
-export AGENTGATEWAY_LICENSE_KEY="<your-license-key>"
-./demo_env.sh
-```
-
-Optional env: `KUBE_CONTEXT`, `ENTERPRISE_AGENTGATEWAY_VERSION`, `GATEWAY_API_VERSION`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`. See `.env.example`.
-
-**UI — OBO flow:** (1) Generate User JWT, (2) Exchange via STS, (3) Call MCP tools/list. UI uses in-cluster URLs when running in Kubernetes.
 
 ## Cleanup
 
