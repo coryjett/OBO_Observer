@@ -214,7 +214,7 @@ spec:
           kind: AgentgatewayBackend
 EOF
 
-echo "Applying access log policy for enterprise-agentgateway (emit request URL, backend name, Authorization header)..."
+echo "Applying access log policy for enterprise-agentgateway (emit request URL, backend name, Authorization header, request/response bodies)..."
 kubectl apply -f - <<'EOF'
 apiVersion: enterpriseagentgateway.solo.io/v1alpha1
 kind: EnterpriseAgentgatewayPolicy
@@ -237,6 +237,10 @@ spec:
             expression: "backend.name"
           - name: "authorization"
             expression: 'default(request.headers["authorization"], "")'
+          - name: "request.body"
+            expression: 'default(request.body, "")'
+          - name: "response.body"
+            expression: 'default(response.body, "")'
 EOF
 
 # In-cluster MCP URL so the displayer pod can call MCP without a port-forward; OBO token audience matches.

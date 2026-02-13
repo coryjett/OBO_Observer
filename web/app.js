@@ -37,6 +37,8 @@ const refs = {
   contextsClear: document.getElementById("contexts-clear"),
   headersRequestDisplay: document.getElementById("headers-request"),
   headersResponseDisplay: document.getElementById("headers-response"),
+  bodyRequestDisplay: document.getElementById("body-request"),
+  bodyResponseDisplay: document.getElementById("body-response"),
   traceSvg: document.getElementById("trace-svg"),
   traceGraphWrap: document.getElementById("trace-graph-wrap"),
   eventMeta: document.getElementById("event-meta"),
@@ -214,11 +216,170 @@ function renderContexts(selected) {
   }
 }
 
+/** Get first header value by key (checks multiple possible keys, case-insensitive). */
+function getHeaderValue(headers, keys) {
+  if (!headers || typeof headers !== "object") return "";
+  const lower = {};
+  for (const [k, v] of Object.entries(headers)) lower[k.toLowerCase()] = v;
+  for (const key of keys) {
+    const v = lower[key.toLowerCase()];
+    if (v != null && String(v).trim() !== "") return String(v).trim();
+  }
+  return "";
+}
+
+/** Try to decode base64 to UTF-8 string. Returns decoded string or null if not valid base64. */
+function tryDecodeBase64(s) {
+  if (typeof s !== "string" || s.length === 0) return null;
+  const trimmed = s.trim();
+  if (!/^[A-Za-z0-9+/]*=*$/.test(trimmed) || trimmed.length % 4 === 1) return null;
+  try {
+    const binary = atob(trimmed);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Fallback: add newlines and indentation to JSON-like text when parse fails (best effort, skips inside strings). */
+function prettyPrintJsonLike(str) {
+  if (typeof str !== "string" || str.length === 0) return str;
+  const out = [];
+  let depth = 0;
+  const indent = () => "  ".repeat(depth);
+  let i = 0;
+  let inString = false;
+  let quote = "";
+  let afterCommaOrBrace = false;
+  while (i < str.length) {
+    const c = str[i];
+    if (inString) {
+      if (c === "\\" && (quote === '"' || quote === "'")) {
+        out.push(c);
+        if (i + 1 < str.length) out.push(str[i + 1]);
+        i += 2;
+        continue;
+      }
+      if (c === quote) inString = false;
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      inString = true;
+      quote = c;
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (c === " " || c === "\t") {
+      out.push(c);
+      i++;
+      continue;
+    }
+    if (c === "\n" || c === "\r") {
+      out.push(c);
+      afterCommaOrBrace = false;
+      i++;
+      continue;
+    }
+    if (c === ",") {
+      out.push(c, "\n", indent());
+      afterCommaOrBrace = true;
+      i++;
+      continue;
+    }
+    if (c === "{" || c === "[") {
+      if (!afterCommaOrBrace && out.length > 0 && out[out.length - 1] !== "\n") out.push("\n");
+      out.push(c, "\n");
+      depth++;
+      out.push(indent());
+      afterCommaOrBrace = false;
+      i++;
+      continue;
+    }
+    if (c === "}" || c === "]") {
+      depth = Math.max(0, depth - 1);
+      out.push("\n", indent(), c);
+      afterCommaOrBrace = false;
+      i++;
+      continue;
+    }
+    out.push(c);
+    i++;
+  }
+  return out.join("").trim();
+}
+
+/** Strip SSE/data-stream style prefix (e.g. "data: ") so the remainder can be parsed as JSON. */
+function stripDataPrefix(str) {
+  const t = str.trim();
+  if (/^data:\s*/i.test(t)) return t.replace(/^data:\s*/i, "").trim();
+  return str;
+}
+
+/** Format body for display: decode base64, normalize, then pretty-print JSON when possible. */
+function formatBodyDisplay(raw) {
+  if (raw == null || String(raw).trim() === "") return null;
+  let s = String(raw).trim();
+  // Remove BOM if present
+  if (s.charCodeAt(0) === 0xfeff) s = s.slice(1);
+  const decoded = tryDecodeBase64(s);
+  if (decoded != null) s = decoded;
+  s = stripDataPrefix(s);
+  function tryPrettyJson(str) {
+    try {
+      const parsed = JSON.parse(str);
+      return JSON.stringify(parsed, null, 2);
+    } catch (_) {
+      return null;
+    }
+  }
+  // Try parse first (handles valid minified JSON without touching it)
+  let out = tryPrettyJson(s);
+  if (out != null) return out;
+  // Unescape literal \n, \t, \r so single-line JSON from logs parses; handle escaped backslashes
+  s = s.replace(/\\\\/g, "\u0000").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\u0000/g, "\\");
+  out = tryPrettyJson(s);
+  if (out != null) return out;
+  // Fix common invalid JSON: trailing comma before ] or }
+  const fixed = s.replace(/,\s*([\]}])/g, "$1");
+  out = tryPrettyJson(fixed);
+  if (out != null) return out;
+  // Unwrap and pretty-print: handle double/triple encoded JSON strings
+  let current = fixed;
+  for (let depth = 0; depth < 5; depth++) {
+    out = tryPrettyJson(current);
+    if (out != null) return out;
+    try {
+      const parsed = JSON.parse(current);
+      if (typeof parsed === "string") {
+        current = parsed.trim();
+        continue;
+      }
+      return JSON.stringify(parsed, null, 2);
+    } catch (_) {
+      break;
+    }
+  }
+  // Fallback: if it looks like JSON (starts with { or [), apply best-effort pretty print
+  const trimmed = current.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return prettyPrintJsonLike(current);
+  }
+  return s;
+}
+
 function renderTokens(selected) {
   const emptyMsg = "Select a context to view headers.";
+  const bodyEmptyMsg = "Select a context to view bodies.";
   if (!selected?.headers) {
     if (refs.headersRequestDisplay) refs.headersRequestDisplay.textContent = emptyMsg;
     if (refs.headersResponseDisplay) refs.headersResponseDisplay.textContent = emptyMsg;
+    if (refs.bodyRequestDisplay) refs.bodyRequestDisplay.textContent = bodyEmptyMsg;
+    if (refs.bodyResponseDisplay) refs.bodyResponseDisplay.textContent = bodyEmptyMsg;
   } else {
     const { requestHeaders, responseHeaders } = splitRequestResponseHeaders(selected.headers);
     if (refs.headersRequestDisplay) {
@@ -227,6 +388,12 @@ function renderTokens(selected) {
     if (refs.headersResponseDisplay) {
       refs.headersResponseDisplay.textContent = formatHeaders(responseHeaders) ?? "(none in log)";
     }
+    const requestBodyRaw = getHeaderValue(selected.headers, ["request.body", "request_body", "body"]);
+    const responseBodyRaw = getHeaderValue(selected.headers, ["response.body", "response_body", "response_body_content"]);
+    const requestBodyText = formatBodyDisplay(requestBodyRaw) ?? "(not in log)";
+    const responseBodyText = formatBodyDisplay(responseBodyRaw) ?? "(not in log)";
+    if (refs.bodyRequestDisplay) refs.bodyRequestDisplay.textContent = requestBodyText;
+    if (refs.bodyResponseDisplay) refs.bodyResponseDisplay.textContent = responseBodyText;
   }
 
   if (!selected) {
@@ -505,7 +672,12 @@ function formatJwtDisplay(rawToken, fallbackLabel) {
   return rawToken;
 }
 
-/** Split parsed log attributes into request (left) vs response (right). Response keys: status, duration, error, etc. */
+/** Keys to omit from the Headers section (shown only in Bodies). */
+const BODY_HEADER_KEYS = new Set([
+  "request.body", "request_body", "response.body", "response_body", "response_body_content", "body",
+].map((s) => s.toLowerCase()));
+
+/** Split parsed log attributes into request (left) vs response (right). Response keys: status, duration, error, etc. Omits body keys (shown in Bodies section). */
 function splitRequestResponseHeaders(headers) {
   const requestHeaders = {};
   const responseHeaders = {};
@@ -518,6 +690,7 @@ function splitRequestResponseHeaders(headers) {
   ]);
   for (const [k, v] of Object.entries(headers)) {
     const keyLower = (k || "").toLowerCase();
+    if (BODY_HEADER_KEYS.has(keyLower)) continue;
     if (responseKeys.has(keyLower) || keyLower.includes("response") || keyLower === "duration") {
       responseHeaders[k] = v;
     } else {
