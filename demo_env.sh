@@ -272,13 +272,5 @@ spec:
         mode: Strict
 EOF
 
-echo "Starting single port-forward (obo-observer only)..."
-echo "  Keycloak, STS, and MCP are reached by the displayer pod via in-cluster URLs; no port-forwards needed for them."
-pkill -f "port-forward -n obo-observer svc/obo-observer 8080:80" 2>/dev/null || true
-sleep 1
-kubectl port-forward -n obo-observer svc/obo-observer 8080:80 &
-sleep 2
-
 echo "Demo environment ready."
-echo "  OBO Observer:  http://localhost:8080  (only port-forward; use the UI to run the OBO flow)"
 echo "Verify: kubectl get pods -n keycloak; kubectl get pods -n agentgateway-system; kubectl get gateway -n agentgateway-system agentgateway-proxy; kubectl get gateway,agentgatewaybackend,httproute -n default"
