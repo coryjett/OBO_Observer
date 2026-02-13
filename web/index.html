@@ -35,7 +35,16 @@
           <details class="headers-details" id="headers-details">
             <summary class="headers-summary">Headers</summary>
             <p class="headers-help">All attributes parsed from the request log (as received by Agentgateway).</p>
-            <pre id="headers-display" class="headers-display">Select a context to view headers.</pre>
+            <div class="headers-split">
+              <div class="headers-column">
+                <div class="headers-column-title">Request</div>
+                <pre id="headers-request" class="headers-display">Select a context to view headers.</pre>
+              </div>
+              <div class="headers-column">
+                <div class="headers-column-title">Response</div>
+                <pre id="headers-response" class="headers-display">Select a context to view headers.</pre>
+              </div>
+            </div>
             <div class="meta" id="event-meta">No event selected</div>
           </details>
 

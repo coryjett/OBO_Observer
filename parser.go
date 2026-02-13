@@ -24,9 +24,7 @@ func ParseLine(raw string) (Event, bool) {
 	if strings.HasPrefix(line, "{") && strings.HasSuffix(line, "}") {
 		jsonFields := map[string]any{}
 		if err := json.Unmarshal([]byte(line), &jsonFields); err == nil {
-			for k, v := range jsonFields {
-				fields[strings.ToLower(k)] = anyToString(v)
-			}
+			flattenJSONIntoFields(jsonFields, fields, "")
 		}
 	}
 
@@ -108,6 +106,10 @@ func ParseLine(raw string) (Event, bool) {
 		event.Headers[k] = v
 	}
 
+	// Blocked/denied at gateway: 401 (no/invalid token) or 403 (policy). Show blocked icon for both.
+	code := responseCodeFromFields(fields)
+	event.BlockedByPolicy = (code == 401 || code == 403) || rawLineContains4xxBlocked(line)
+
 	// Accept any line that looks like a request: path/context, JWTs, trace, or request metadata (client/backend)
 	interesting := event.Context != "" || event.InboundJWT != "" || event.ExchangedJWT != "" || event.TraceID != "" ||
 		event.Client != "" || event.Backend != "" || event.Route != ""
@@ -135,6 +137,26 @@ func parseTimestamp(fields map[string]string) time.Time {
 	return time.Time{}
 }
 
+// flattenJSONIntoFields writes JSON object keys into fields with dot-separated names (e.g. http.status).
+func flattenJSONIntoFields(obj map[string]any, fields map[string]string, prefix string) {
+	for k, v := range obj {
+		key := strings.ToLower(strings.TrimSpace(k))
+		if key == "" {
+			continue
+		}
+		fullKey := key
+		if prefix != "" {
+			fullKey = prefix + "." + key
+		}
+		switch val := v.(type) {
+		case map[string]any:
+			flattenJSONIntoFields(val, fields, fullKey)
+		default:
+			fields[fullKey] = anyToString(v)
+		}
+	}
+}
+
 func firstNonEmpty(fields map[string]string, keys ...string) string {
 	for _, key := range keys {
 		if value := strings.TrimSpace(fields[strings.ToLower(key)]); value != "" {
@@ -142,6 +164,37 @@ func firstNonEmpty(fields map[string]string, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// responseCodeFromFields returns the HTTP response code from log fields. Agentgateway uses http.status; Envoy uses response_code.
+func responseCodeFromFields(fields map[string]string) int {
+	value := firstNonEmpty(fields, "http.status", "response_code", "response_code_number", "response_code_number_value", "status", "http_status_code", "http_status")
+	if value == "" {
+		return 0
+	}
+	var code int
+	if _, err := fmt.Sscanf(value, "%d", &code); err != nil {
+		return 0
+	}
+	return code
+}
+
+// rawLineContains4xxBlocked returns true if the raw log line indicates HTTP 401 or 403 (denied/blocked at gateway).
+func rawLineContains4xxBlocked(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	for _, code := range []string{"401", "403"} {
+		if strings.Contains(line, "http.status="+code) || strings.Contains(line, "response_code="+code) ||
+			strings.Contains(line, "status="+code) || strings.Contains(line, "http_status="+code) {
+			return true
+		}
+		if strings.Contains(line, " "+code+" ") || strings.HasSuffix(line, " "+code) || strings.HasPrefix(line, code+" ") {
+			return true
+		}
+	}
+	return false
 }
 
 func anyToString(value any) string {

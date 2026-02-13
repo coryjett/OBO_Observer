@@ -86,6 +86,41 @@ func (s *FileLogSource) Start(ctx context.Context, out chan<- string) error {
 	}
 }
 
+// SampleLogSource emits sample log lines for local demo (no k8s or file needed).
+type SampleLogSource struct {
+	interval time.Duration
+}
+
+func (s *SampleLogSource) Start(ctx context.Context, out chan<- string) error {
+	ticker := time.NewTicker(s.interval)
+	defer ticker.Stop()
+	samples := []map[string]string{
+		{"context": "/mcp", "client": "10.42.0.1:12345", "proxy": "enterprise-agentgateway", "backend": "default/kagent-tools", "trace_id": "sample-1", "span_id": "span-1"},
+		{"context": "/mcp", "client": "obo-observer/obo-observer", "proxy": "enterprise-agentgateway", "backend": "default/kagent-tools", "trace_id": "sample-2", "span_id": "span-2"},
+		{"context": "/health", "client": "10.42.0.2:54321", "proxy": "enterprise-agentgateway", "backend": "default/echo", "trace_id": "sample-3", "span_id": "span-3"},
+	}
+	n := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			fields := samples[n%len(samples)]
+			fields["timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
+			line, err := json.Marshal(fields)
+			if err != nil {
+				continue
+			}
+			select {
+			case out <- string(line):
+			case <-ctx.Done():
+				return nil
+			}
+			n++
+		}
+	}
+}
+
 type KubernetesLogSource struct {
 	namespace     string
 	labelSelector string

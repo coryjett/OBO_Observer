@@ -17,6 +17,18 @@ import (
 //go:embed web/*
 var webFS embed.FS
 
+// noCacheJS wraps a handler to set Cache-Control: no-cache for .js (and .css) so dev always gets latest.
+func noCacheJS(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "" {
+			if strings.HasSuffix(r.URL.Path, ".js") || strings.HasSuffix(r.URL.Path, ".css") {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	addr := getEnv("HTTP_ADDR", ":8080")
 	runObserverMode(addr)
@@ -24,6 +36,10 @@ func main() {
 
 func runObserverMode(addr string) {
 	logMode := strings.ToLower(getEnv("LOG_MODE", "kubernetes"))
+	if logMode == "kubernetes" && os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
+		logMode = "sample"
+		log.Printf("Not in cluster (KUBERNETES_SERVICE_HOST unset); using LOG_MODE=sample. Set LOG_MODE=file and LOG_FILE_PATH for a log file, or run in-cluster for kubernetes.")
+	}
 	bufferSize := getEnvInt("EVENT_BUFFER_SIZE", 500)
 
 	store := NewEventStore(bufferSize)
@@ -170,7 +186,7 @@ func runObserverMode(addr string) {
 	if err != nil {
 		log.Fatalf("failed to build web filesystem: %v", err)
 	}
-	mux.Handle("/", http.FileServer(http.FS(staticFS)))
+	mux.Handle("/", noCacheJS(http.FileServer(http.FS(staticFS))))
 
 	server := &http.Server{
 		Addr:              addr,
@@ -187,7 +203,13 @@ func runObserverMode(addr string) {
 func createSource(mode string) (LogSource, error) {
 	switch mode {
 	case "file":
-		return &FileLogSource{path: getEnv("LOG_FILE_PATH", "/var/log/agentgateway/access.log")}, nil
+		return &FileLogSource{path: getEnv("LOG_FILE_PATH", "/tmp/obo-access.log")}, nil
+	case "sample":
+		interval := 5 * time.Second
+		if i := getEnvInt("SAMPLE_INTERVAL_SEC", 5); i > 0 {
+			interval = time.Duration(i) * time.Second
+		}
+		return &SampleLogSource{interval: interval}, nil
 	case "kubernetes":
 		namespace := getEnv("K8S_NAMESPACE", "agentgateway-system")
 		selector := getEnv("K8S_POD_LABEL_SELECTOR", "app=agentgateway-proxy")
@@ -195,7 +217,7 @@ func createSource(mode string) (LogSource, error) {
 		tailLines := getEnvInt("K8S_TAIL_LINES", 200)
 		return NewKubernetesLogSource(namespace, selector, container, tailLines)
 	default:
-		return nil, fmt.Errorf("LOG_MODE must be 'kubernetes' or 'file' (got %q); sample mode is disabled", mode)
+		return nil, fmt.Errorf("LOG_MODE must be 'kubernetes', 'file', or 'sample' (got %q)", mode)
 	}
 }
 

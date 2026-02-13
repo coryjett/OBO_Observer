@@ -1,5 +1,6 @@
 const POLL_MS = 1500;
 const MAX_CONTEXTS = 120;
+const STORAGE_KEY_IMPERSONATION_OBO = "obo-observer-impersonation-obo-jwt";
 
 const state = {
   events: [],
@@ -9,14 +10,33 @@ const state = {
   workflow: {
     userJwt: "",
     oboJwt: "",
+    lastExchangeMode: "", // "impersonation" | "delegation" | "" — set when step 2 completes
+    /** OBO JWT from the last impersonation exchange; used only for "Impersonation JWT" badge. Persisted so refresh keeps labels. */
+    impersonationOboJwt: "",
+    blockedByPolicy: false,
   },
 };
+
+function loadPersistedImpersonationOboJwt() {
+  try {
+    const s = typeof localStorage !== "undefined" && localStorage.getItem(STORAGE_KEY_IMPERSONATION_OBO);
+    if (s && String(s).trim()) state.workflow.impersonationOboJwt = String(s).trim();
+  } catch (_) {}
+}
+function savePersistedImpersonationOboJwt() {
+  try {
+    const v = (state.workflow.impersonationOboJwt || "").trim();
+    if (v) localStorage.setItem(STORAGE_KEY_IMPERSONATION_OBO, v);
+    else localStorage.removeItem(STORAGE_KEY_IMPERSONATION_OBO);
+  } catch (_) {}
+}
 
 const refs = {
   status: document.getElementById("status"),
   contextList: document.getElementById("context-list"),
   contextsClear: document.getElementById("contexts-clear"),
-  headersDisplay: document.getElementById("headers-display"),
+  headersRequestDisplay: document.getElementById("headers-request"),
+  headersResponseDisplay: document.getElementById("headers-response"),
   traceSvg: document.getElementById("trace-svg"),
   traceGraphWrap: document.getElementById("trace-graph-wrap"),
   eventMeta: document.getElementById("event-meta"),
@@ -117,7 +137,7 @@ function startLogStream() {
 
 function render() {
   refs.status.className = `status ${state.healthy ? "status-ok" : "status-warn"}`;
-  const modeLabel = state.logMode === "kubernetes" ? " (Agentgateway)" : state.logMode === "file" ? " (file)" : "";
+  const modeLabel = state.logMode === "kubernetes" ? " (Agentgateway)" : state.logMode === "file" ? " (file)" : state.logMode === "sample" ? " (Sample)" : "";
   refs.status.textContent = state.healthy ? "Live" + modeLabel : "Disconnected";
 
   if (!state.selectedId && state.events.length > 0) {
@@ -165,11 +185,14 @@ function renderContexts(selected) {
     const inboundToken = event.inboundJwt && String(event.inboundJwt).trim();
     const usedObo = inboundToken && isOboToken(inboundToken);
     const usedUserJwt = inboundToken && !usedObo;
+    const usedImpersonation = usedUserJwt && isImpersonationContext(event);
     const badge = usedObo
       ? '<span class="obo-jwt-badge">OBO JWT</span>'
-      : usedUserJwt
-        ? '<span class="jwt-badge">User JWT</span>'
-        : '';
+      : usedImpersonation
+        ? '<span class="impersonation-jwt-badge">Impersonation JWT</span>'
+        : usedUserJwt
+          ? '<span class="jwt-badge">User JWT</span>'
+          : '';
     let timeStr = "";
     if (event.timestamp) {
       const d = new Date(event.timestamp);
@@ -192,8 +215,18 @@ function renderContexts(selected) {
 }
 
 function renderTokens(selected) {
-  if (refs.headersDisplay) {
-    refs.headersDisplay.textContent = formatHeaders(selected?.headers);
+  const emptyMsg = "Select a context to view headers.";
+  if (!selected?.headers) {
+    if (refs.headersRequestDisplay) refs.headersRequestDisplay.textContent = emptyMsg;
+    if (refs.headersResponseDisplay) refs.headersResponseDisplay.textContent = emptyMsg;
+  } else {
+    const { requestHeaders, responseHeaders } = splitRequestResponseHeaders(selected.headers);
+    if (refs.headersRequestDisplay) {
+      refs.headersRequestDisplay.textContent = formatHeaders(requestHeaders) ?? "(none in log)";
+    }
+    if (refs.headersResponseDisplay) {
+      refs.headersResponseDisplay.textContent = formatHeaders(responseHeaders) ?? "(none in log)";
+    }
   }
 
   if (!selected) {
@@ -205,11 +238,11 @@ function renderTokens(selected) {
   refs.eventMeta.textContent = `${timestamp} | trace=${selected.traceId || "n/a"} | span=${selected.currentSpanId || "n/a"}`;
 }
 
-/** Content bounds for trace graph: left, top, width, height (nodes at 130,450,770 y=130; labels at 44,64). */
+/** Content bounds for trace graph (nodes at 130,450,770 y=130; no labels above). */
 const TRACE_VIEW_WIDTH = 900;
-const TRACE_VIEW_HEIGHT = 200;
+const TRACE_VIEW_HEIGHT = 170;
 const EMPTY_VIEW_WIDTH = 400;
-const EMPTY_VIEW_HEIGHT = 160;
+const EMPTY_VIEW_HEIGHT = 120;
 
 function setTracePanelSize(width, height) {
   const wrap = refs.traceGraphWrap;
@@ -251,16 +284,16 @@ function renderTrace(selected) {
   for (const node of nodes) {
     drawNode(svg, node);
   }
-
-  drawLabel(svg, 450, 44, selected.context || "(context missing)");
-  const sourceForLabel = selected.resolvedClient || selected.client;
-  if (sourceForLabel) {
-    const sourceDisplay = sourceForLabel.length > 52 ? sourceForLabel.slice(0, 49) + "…" : sourceForLabel;
-    drawLabel(svg, 450, 64, sourceDisplay, "Source: ");
+  if (isEventBlocked(selected) && nodes[1]) {
+    drawBlockedOverlay(svg, nodes[1]);
   }
 
-  svg.setAttribute("viewBox", `0 0 ${TRACE_VIEW_WIDTH} ${TRACE_VIEW_HEIGHT}`);
-  setTracePanelSize(TRACE_VIEW_WIDTH, TRACE_VIEW_HEIGHT);
+  // ViewBox centered on nodes (y=130); equal padding above and below
+  const nodeCenterY = 130;
+  const viewBoxH = 170;
+  const viewBoxY = nodeCenterY - viewBoxH / 2; // 45 -> show y 45..215, nodes 88..172
+  svg.setAttribute("viewBox", `0 ${viewBoxY} ${TRACE_VIEW_WIDTH} ${viewBoxH}`);
+  setTracePanelSize(TRACE_VIEW_WIDTH, viewBoxH);
 }
 
 const NODE_BOX_WIDTH = 230;
@@ -319,15 +352,36 @@ function drawEdge(svg, fromNode, toNode) {
   svg.appendChild(marker);
 }
 
-function drawLabel(svg, x, y, textValue, prefix = "Context: ") {
-  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
-  text.setAttribute("x", String(x));
-  text.setAttribute("y", String(y));
-  text.setAttribute("text-anchor", "middle");
-  text.setAttribute("font-size", prefix === "Context: " ? 15 : 13);
-  text.setAttribute("fill", "#b8c9e8");
-  text.textContent = prefix + textValue;
-  svg.appendChild(text);
+function drawBlockedOverlay(svg, node) {
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  const size = 52;
+  const r = size / 2;
+  // Center icon horizontally on node; shift down slightly so it sits in lower half and doesn't cover the label
+  const offsetY = 38;
+  g.setAttribute("transform", `translate(${node.x},${node.y + offsetY})`);
+  g.setAttribute("class", "trace-blocked-overlay");
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  title.textContent = "Blocked or denied at gateway (401/403)";
+  g.appendChild(title);
+
+  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  circle.setAttribute("r", String(r));
+  circle.setAttribute("fill", "#c53030");
+  circle.setAttribute("stroke", "#fff");
+  circle.setAttribute("stroke-width", "3");
+  g.appendChild(circle);
+
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("x1", String(-r * 0.7));
+  line.setAttribute("y1", String(-r * 0.7));
+  line.setAttribute("x2", String(r * 0.7));
+  line.setAttribute("y2", String(r * 0.7));
+  line.setAttribute("stroke", "#fff");
+  line.setAttribute("stroke-width", "4");
+  line.setAttribute("stroke-linecap", "round");
+  g.appendChild(line);
+
+  svg.appendChild(g);
 }
 
 function drawEmptyGraph(svg) {
@@ -339,6 +393,29 @@ function drawEmptyGraph(svg) {
   text.setAttribute("fill", "#98a9ca");
   text.textContent = "Waiting for trace events...";
   svg.appendChild(text);
+}
+
+/** True when this context/event represents a request denied/blocked at gateway (401 or 403). */
+function isEventBlocked(event) {
+  if (!event) return false;
+  if (event.blockedByPolicy) return true;
+  const h = event.headers;
+  if (h && typeof h === "object") {
+    const statusKeys = ["http.status", "response_code", "response_code_number", "status", "http_status_code", "http_status"];
+    for (const k of statusKeys) {
+      const val = String((h[k] ?? "")).trim();
+      if (val === "401" || val === "403") return true;
+    }
+    for (const [k, v] of Object.entries(h)) {
+      const key = (k || "").toLowerCase();
+      const val = String(v || "").trim();
+      if ((val === "401" || val === "403") && (key.includes("status") || key.includes("code"))) return true;
+    }
+  }
+  const raw = String(event.rawLine || "");
+  if (/http\.status=(401|403)|response_code=(401|403)|status=(401|403)|http_status=(401|403)/.test(raw)) return true;
+  if (/\s(401|403)\s|^(401|403)\s|\s(401|403)$/.test(raw)) return true;
+  return false;
 }
 
 /** Strip leading "namespace/" for trace graph (e.g. default/kagent-tools -> kagent-tools). */
@@ -409,6 +486,17 @@ function isOboToken(token) {
   return payload != null && "act" in payload;
 }
 
+/** True if this context used an impersonation token (matches the OBO JWT we got from an impersonation exchange). */
+function isImpersonationContext(event) {
+  if (!event) return false;
+  const oboJwt = (state.workflow.impersonationOboJwt || "").trim();
+  const inbound = (event.inboundJwt && String(event.inboundJwt).trim()) || "";
+  if (!oboJwt || !inbound) return false;
+  if (inbound === oboJwt) return true;
+  if (inbound.length >= 50 && oboJwt.length >= 50 && inbound.slice(0, 50) === oboJwt.slice(0, 50)) return true;
+  return false;
+}
+
 /** Format token for display: show decoded payload, or raw if decode fails. */
 function formatJwtDisplay(rawToken, fallbackLabel) {
   if (!rawToken) return fallbackLabel || "(none)";
@@ -417,11 +505,33 @@ function formatJwtDisplay(rawToken, fallbackLabel) {
   return rawToken;
 }
 
-/** Format headers map as key: value lines (sorted by key). */
+/** Split parsed log attributes into request (left) vs response (right). Response keys: status, duration, error, etc. */
+function splitRequestResponseHeaders(headers) {
+  const requestHeaders = {};
+  const responseHeaders = {};
+  if (!headers || typeof headers !== "object") {
+    return { requestHeaders, responseHeaders };
+  }
+  const responseKeys = new Set([
+    "http.status", "duration", "response_code", "response_code_number", "response_code_number_value",
+    "status", "http_status_code", "http_status", "error",
+  ]);
+  for (const [k, v] of Object.entries(headers)) {
+    const keyLower = (k || "").toLowerCase();
+    if (responseKeys.has(keyLower) || keyLower.includes("response") || keyLower === "duration") {
+      responseHeaders[k] = v;
+    } else {
+      requestHeaders[k] = v;
+    }
+  }
+  return { requestHeaders, responseHeaders };
+}
+
+/** Format headers map as key: value lines (sorted by key). Returns null for empty. */
 function formatHeaders(headers) {
-  if (!headers || typeof headers !== "object") return "Select a context to view headers.";
+  if (!headers || typeof headers !== "object") return null;
   const keys = Object.keys(headers).sort();
-  if (keys.length === 0) return "(no headers in log)";
+  if (keys.length === 0) return "(none in log)";
   return keys.map((k) => `${k}: ${headers[k]}`).join("\n");
 }
 
@@ -483,7 +593,10 @@ async function postJSON(url, body) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(payload.error || `Request failed (${response.status})`);
+    const err = new Error(payload.error || `Request failed (${response.status})`);
+    err.payload = payload;
+    err.status = response.status;
+    throw err;
   }
   return payload;
 }
@@ -528,6 +641,12 @@ async function handleStep2() {
       actorToken: input.actorToken,
     });
     state.workflow.oboJwt = payload.oboJwt || "";
+    state.workflow.lastExchangeMode = (input.exchangeMode || "").toLowerCase().trim() || "delegation";
+    const isImpersonation = state.workflow.lastExchangeMode === "impersonation";
+    if (isImpersonation) {
+      state.workflow.impersonationOboJwt = state.workflow.oboJwt;
+      savePersistedImpersonationOboJwt();
+    }
     refs.wfOboJwt.textContent = formatJwtDisplay(state.workflow.oboJwt, "(empty OBO JWT)");
     setWorkflowStatus("Step 2 complete: STS returned OBO JWT.");
   } catch (error) {
@@ -539,6 +658,7 @@ async function handleStep2() {
 
 async function callMCPTools(tokenType) {
   setWorkflowBusy(true);
+  state.workflow.blockedByPolicy = false;
   const input = collectWorkflowInputs();
   const useUserJwt = tokenType === "user-jwt";
   const useOboJwt = tokenType === "obo-jwt";
@@ -568,6 +688,10 @@ async function callMCPTools(tokenType) {
     refs.wfTools.textContent = `Tools:\n${toolsText}\n\nRaw:\n${rawText}`;
     setWorkflowStatus("Step 3 complete: MCP tools listed.");
   } catch (error) {
+    if (error.status === 403 || (error.payload && error.payload.blockedByPolicy)) {
+      state.workflow.blockedByPolicy = true;
+      render();
+    }
     setWorkflowStatus(`Step 3 failed: ${error.message}`, true);
     const hint =
       tokenType === "no-jwt"
@@ -589,6 +713,10 @@ async function handleStep3() {
 function handleClearJWTs() {
   state.workflow.userJwt = "";
   state.workflow.oboJwt = "";
+  state.workflow.lastExchangeMode = "";
+  state.workflow.impersonationOboJwt = "";
+  savePersistedImpersonationOboJwt();
+  state.workflow.blockedByPolicy = false;
   refs.wfUserJwt.textContent = "(not generated yet)";
   refs.wfOboJwt.textContent = "(not exchanged yet)";
   setWorkflowStatus("User and OBO JWTs cleared. You can run step 3 without a JWT to see 401.");
@@ -627,6 +755,7 @@ function initWorkflow() {
 if (refs.contextsClear) {
   refs.contextsClear.addEventListener("click", handleContextsClear);
 }
+loadPersistedImpersonationOboJwt();
 initWorkflow();
 poll();
 setInterval(poll, POLL_MS);

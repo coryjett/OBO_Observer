@@ -169,6 +169,10 @@ func handleMCPTools(w http.ResponseWriter, r *http.Request) {
 
 	sessionID, statusCode, err := initializeMCP(strings.TrimRight(req.MCPURL, "/"), token)
 	if err != nil {
+		if statusCode == http.StatusForbidden {
+			writeErrorBlockedByPolicy(w, "MCP request blocked by EnterpriseAgentgatewayPolicy (403 Forbidden).")
+			return
+		}
 		if statusCode == http.StatusUnauthorized {
 			if req.UseUserJWT {
 				writeError(w, http.StatusUnauthorized, "MCP returned 401 Unauthorized (User JWT not accepted; gateway expects OBO token). Run step 2 to exchange for an OBO JWT.")
@@ -186,8 +190,12 @@ func handleMCPTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	toolsPayload, err := mcpToolsList(strings.TrimRight(req.MCPURL, "/"), token, sessionID)
+	toolsPayload, statusCode, err := mcpToolsList(strings.TrimRight(req.MCPURL, "/"), token, sessionID)
 	if err != nil {
+		if statusCode == http.StatusForbidden {
+			writeErrorBlockedByPolicy(w, "MCP request blocked by EnterpriseAgentgatewayPolicy (403 Forbidden).")
+			return
+		}
 		writeError(w, http.StatusBadGateway, "mcp tools/list failed: "+err.Error())
 		return
 	}
@@ -274,12 +282,12 @@ func mcpNotificationInitialized(mcpURL, oboJWT, sessionID string) error {
 	return nil
 }
 
-func mcpToolsList(mcpURL, oboJWT, sessionID string) (map[string]any, error) {
+func mcpToolsList(mcpURL, oboJWT, sessionID string) (map[string]any, int, error) {
 	client := &http.Client{Timeout: 20 * time.Second}
 	body := `{"jsonrpc":"2.0","method":"tools/list","id":2}`
 	req, err := http.NewRequest(http.MethodPost, mcpURL, strings.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if oboJWT != "" {
 		req.Header.Set("Authorization", "Bearer "+oboJWT)
@@ -290,15 +298,15 @@ func mcpToolsList(mcpURL, oboJWT, sessionID string) (map[string]any, error) {
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, errors.New("status " + http.StatusText(resp.StatusCode))
+		return nil, resp.StatusCode, errors.New("status " + http.StatusText(resp.StatusCode))
 	}
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	text := strings.TrimSpace(string(data))
@@ -314,9 +322,9 @@ func mcpToolsList(mcpURL, oboJWT, sessionID string) (map[string]any, error) {
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	return payload, nil
+	return payload, 0, nil
 }
 
 func collectToolNames(payload map[string]any) []string {
@@ -354,4 +362,10 @@ func writeError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func writeErrorBlockedByPolicy(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusForbidden)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": message, "blockedByPolicy": true})
 }

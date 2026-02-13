@@ -20,4 +20,5 @@ type Event struct {
 	ParentSpanID  string            `json:"parentSpanId"`
 	CurrentSpanID string            `json:"currentSpanId"`
 	Headers       map[string]string `json:"headers"` // all key-value pairs parsed from the log (request/response attributes)
+	BlockedByPolicy bool `json:"blockedByPolicy,omitempty"` // true when log indicates 401 or 403 (denied/blocked at gateway)
 }
