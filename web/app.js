@@ -37,7 +37,9 @@ const refs = {
   wfUsername: document.getElementById("wf-username"),
   wfPassword: document.getElementById("wf-password"),
   wfStsUrl: document.getElementById("wf-sts-url"),
+  wfExchangeMode: document.getElementById("wf-exchange-mode"),
   wfActorToken: document.getElementById("wf-actor-token"),
+  wfActorTokenLabel: document.getElementById("wf-actor-token-label"),
   wfMcpUrl: document.getElementById("wf-mcp-url"),
 };
 
@@ -466,6 +468,7 @@ function collectWorkflowInputs() {
     username: refs.wfUsername.value.trim(),
     password: refs.wfPassword.value,
     stsUrl: refs.wfStsUrl.value.trim(),
+    exchangeMode: (refs.wfExchangeMode && refs.wfExchangeMode.value) || "delegation",
     actorToken: refs.wfActorToken.value.trim(),
     mcpUrl: refs.wfMcpUrl.value.trim(),
   };
@@ -521,6 +524,7 @@ async function handleStep2() {
     const payload = await postJSON("/api/obo/exchange", {
       stsUrl: input.stsUrl,
       userJwt: state.workflow.userJwt,
+      exchangeMode: input.exchangeMode,
       actorToken: input.actorToken,
     });
     state.workflow.oboJwt = payload.oboJwt || "";
@@ -600,11 +604,24 @@ async function handleContextsClear() {
   } catch (_) {}
 }
 
+function updateExchangeModeUI() {
+  const mode = refs.wfExchangeMode && refs.wfExchangeMode.value;
+  const label = refs.wfActorTokenLabel;
+  if (label) label.style.display = mode === "delegation" ? "" : "none";
+  // Clear OBO JWT when exchange mode changes (it was obtained with the previous mode).
+  state.workflow.oboJwt = "";
+  if (refs.wfOboJwt) refs.wfOboJwt.textContent = "(not exchanged yet)";
+}
+
 function initWorkflow() {
   refs.wfStep1.addEventListener("click", handleStep1);
   refs.wfStep2.addEventListener("click", handleStep2);
   refs.wfStep3.addEventListener("click", handleStep3);
   if (refs.wfClearJwts) refs.wfClearJwts.addEventListener("click", handleClearJWTs);
+  if (refs.wfExchangeMode) {
+    refs.wfExchangeMode.addEventListener("change", updateExchangeModeUI);
+    updateExchangeModeUI();
+  }
 }
 
 if (refs.contextsClear) {

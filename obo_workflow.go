@@ -21,9 +21,10 @@ type userJWTRequest struct {
 }
 
 type exchangeRequest struct {
-	STSURL     string `json:"stsUrl"`
-	UserJWT    string `json:"userJwt"`
-	ActorToken string `json:"actorToken"`
+	STSURL       string `json:"stsUrl"`
+	UserJWT      string `json:"userJwt"`
+	ActorToken   string `json:"actorToken"`
+	ExchangeMode string `json:"exchangeMode"` // "impersonation" (subject only) or "delegation" (subject + actor)
 }
 
 type mcpToolsRequest struct {
@@ -92,24 +93,32 @@ func handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	actorToken := strings.TrimSpace(req.ActorToken)
-	if actorToken == "" {
-		data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-		if err == nil {
-			actorToken = strings.TrimSpace(string(data))
-		}
-	}
-	if actorToken == "" {
-		writeError(w, http.StatusBadRequest, "actor token missing; provide actorToken or run in Kubernetes")
-		return
+	exchangeMode := strings.TrimSpace(strings.ToLower(req.ExchangeMode))
+	if exchangeMode == "" {
+		exchangeMode = "delegation"
 	}
 
 	form := url.Values{}
 	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
 	form.Set("subject_token", req.UserJWT)
 	form.Set("subject_token_type", "urn:ietf:params:oauth:token-type:jwt")
-	form.Set("actor_token", actorToken)
-	form.Set("actor_token_type", "urn:ietf:params:oauth:token-type:jwt")
+
+	if exchangeMode == "delegation" {
+		actorToken := strings.TrimSpace(req.ActorToken)
+		if actorToken == "" {
+			data, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+			if err == nil {
+				actorToken = strings.TrimSpace(string(data))
+			}
+		}
+		if actorToken == "" {
+			writeError(w, http.StatusBadRequest, "delegation requires an actor token; provide actorToken or run in Kubernetes")
+			return
+		}
+		form.Set("actor_token", actorToken)
+		form.Set("actor_token_type", "urn:ietf:params:oauth:token-type:jwt")
+	}
+	// impersonation: subject_token only (no actor_token)
 
 	body, status, err := postForm(strings.TrimRight(req.STSURL, "/")+"/token", form, "Bearer "+req.UserJWT)
 	if err != nil {

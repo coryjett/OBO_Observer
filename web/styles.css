@@ -479,6 +479,28 @@ body {
   gap: 8px;
 }
 
+.workflow-exchange-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-exchange-label {
+  margin: 0;
+  font-size: 0.74rem;
+  color: var(--text-dim);
+}
+
+.workflow-exchange-select {
+  border: 1px solid #315281;
+  background: #0f1f35;
+  color: #e5f0ff;
+  font-size: 0.74rem;
+  border-radius: 6px;
+  padding: 5px 8px;
+  min-width: 180px;
+}
+
 .workflow-mcp-label {
   margin: 0;
   font-size: 0.74rem;

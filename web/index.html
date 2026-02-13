@@ -56,13 +56,20 @@
                   <label>Username <input id="wf-username" value="testuser" /></label>
                   <label>Password <input id="wf-password" type="password" value="testuser" /></label>
                   <label>STS URL <input id="wf-sts-url" value="http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777" placeholder="In-cluster: enterprise-agentgateway.agentgateway-system…" /></label>
-                  <label>Actor Token (optional) <input id="wf-actor-token" placeholder="Leave empty to use pod service account token" /></label>
+                  <label id="wf-actor-token-label">Actor Token (for delegation) <input id="wf-actor-token" placeholder="Leave empty to use pod service account token" /></label>
                   <label class="span2">MCP URL <input id="wf-mcp-url" value="http://enterprise-agentgateway.default.svc.cluster.local/mcp" placeholder="In-cluster: enterprise-agentgateway.default…/mcp" /></label>
                 </div>
               </details>
               <div class="workflow-actions">
                 <button id="wf-step-1" type="button">1) Generate User JWT</button>
-                <button id="wf-step-2" type="button">2) Exchange via STS</button>
+                <span class="workflow-exchange-row">
+                  <button id="wf-step-2" type="button">2) Exchange via STS</button>
+                  <label for="wf-exchange-mode" class="workflow-exchange-label">Exchange mode</label>
+                  <select id="wf-exchange-mode" class="workflow-exchange-select" aria-label="STS token exchange mode">
+                    <option value="delegation" selected>Delegation (subject + actor)</option>
+                    <option value="impersonation">Impersonation (subject only)</option>
+                  </select>
+                </span>
                 <span class="workflow-mcp-row">
                   <label for="wf-mcp-token-type" class="workflow-mcp-label">3) Call MCP tools/list</label>
                   <select id="wf-mcp-token-type" class="workflow-mcp-select" aria-label="Token type for MCP call">
