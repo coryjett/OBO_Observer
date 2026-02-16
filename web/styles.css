@@ -45,6 +45,37 @@ body {
   z-index: 5;
 }
 
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.topbar-user {
+  font-size: 0.88rem;
+  color: var(--text-dim);
+}
+
+.topbar-logout {
+  font-size: 0.82rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.topbar-logout:hover {
+  text-decoration: underline;
+}
+
+.topbar-login {
+  font-size: 0.82rem;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.topbar-login:hover {
+  text-decoration: underline;
+}
+
 .workflow-status-toast {
   position: sticky;
   top: 60px;

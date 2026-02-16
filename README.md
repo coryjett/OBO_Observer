@@ -33,7 +33,15 @@ export AGENTGATEWAY_LICENSE_KEY="<your-license-key>"
 
 Optional env: `KUBE_CONTEXT`, `ENTERPRISE_AGENTGATEWAY_VERSION`, `GATEWAY_API_VERSION`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`. See `.env.example`.
 
-**UI — OBO flow:** (1) Generate User JWT, (2) Exchange via STS, (3) Call MCP tools/list. UI uses in-cluster URLs when running in Kubernetes.
+**Default login** — Keycloak (and the OBO Observer app when using the demo) uses this user:
+
+| Username | Password |
+|----------|----------|
+| `testuser` | `testuser` |
+
+**UI — OBO flow:** When Keycloak login is configured, opening the app redirects to Keycloak; after login your username appears in the top right and **Exchange via STS** uses your session token. Otherwise: (1) Generate User JWT, (2) Exchange via STS, (3) Call MCP tools/list. UI uses in-cluster URLs when running in Kubernetes.
+
+**Optional: Keycloak login** — Set `KEYCLOAK_URL`, `OAUTH2_CLIENT_ID`, `OAUTH2_CLIENT_SECRET`, and `BASE_URL` (e.g. `http://localhost:8080`). Create a Keycloak client with the same client ID, secret, and redirect URI `{BASE_URL}/auth/callback`. Optionally set `SESSION_SECRET` (32 bytes) for cookie encryption and `KEYCLOAK_REALM` (default `oidc-realm`).
 
 ## Deploy to Kubernetes
 

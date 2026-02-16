@@ -97,6 +97,10 @@ func runObserverMode(addr string) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("/login", handleLogin)
+	mux.HandleFunc("/auth/callback", handleAuthCallback)
+	mux.HandleFunc("/auth/logout", handleLogout)
+	mux.HandleFunc("/api/me", handleMe)
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, map[string]string{"log_mode": logMode})
@@ -188,9 +192,10 @@ func runObserverMode(addr string) {
 	}
 	mux.Handle("/", noCacheJS(http.FileServer(http.FS(staticFS))))
 
+	handler := requireAuth(mux)
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           withCORS(mux),
+		Handler:           withCORS(handler),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

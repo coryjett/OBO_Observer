@@ -9,7 +9,12 @@
   <body>
     <header class="topbar">
       <div class="brand">OBO Observer</div>
-      <div id="status" class="status status-warn">Connecting...</div>
+      <div class="topbar-right">
+        <span id="user-display" class="topbar-user" aria-hidden="true"></span>
+        <a href="/login" id="login-link" class="topbar-login">Log in</a>
+        <a href="/auth/logout" id="logout-link" class="topbar-logout" style="display: none;">Log out</a>
+        <div id="status" class="status status-warn">Connecting...</div>
+      </div>
     </header>
 
     <div id="wf-status" class="workflow-status-toast" aria-live="polite"></div>
@@ -66,26 +71,19 @@
           <div class="workflow">
             <h3>Interactive OBO Flow</h3>
             <p class="workflow-help">
-              Run the full flow in order: generate user JWT, exchange with STS, then call MCP backend and list tools.
+              Log in (top right), then Exchange via STS uses your session token. Call MCP tools/list with the OBO Token.
             </p>
 
             <div class="workflow-config">
               <details class="workflow-config-details">
                 <summary class="workflow-config-summary">OBO configuration</summary>
                 <div class="workflow-grid">
-                  <label>Keycloak URL <input id="wf-keycloak-url" value="http://keycloak.keycloak.svc.cluster.local:8080" placeholder="In-cluster: keycloak.keycloak…; local: localhost:8081" /></label>
-                  <label>Realm <input id="wf-realm" value="oidc-realm" /></label>
-                  <label>Client ID <input id="wf-client-id" value="agw-client" /></label>
-                  <label>Client Secret <input id="wf-client-secret" value="agw-client-secret" /></label>
-                  <label>Username <input id="wf-username" value="testuser" /></label>
-                  <label>Password <input id="wf-password" type="password" value="testuser" /></label>
                   <label>STS URL <input id="wf-sts-url" value="http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777" placeholder="In-cluster: enterprise-agentgateway.agentgateway-system…" /></label>
                   <label id="wf-actor-token-label">Actor Token (for delegation) <input id="wf-actor-token" placeholder="Leave empty to use pod service account token" /></label>
                   <label class="span2">MCP URL <input id="wf-mcp-url" value="http://enterprise-agentgateway.default.svc.cluster.local/mcp" placeholder="In-cluster: enterprise-agentgateway.default…/mcp" /></label>
                 </div>
               </details>
               <div class="workflow-actions">
-                <button id="wf-step-1" type="button">1) Generate User JWT</button>
                 <span class="workflow-exchange-row">
                   <button id="wf-step-2" type="button">2) Exchange via STS</button>
                   <label for="wf-exchange-mode" class="workflow-exchange-label">Exchange mode</label>
@@ -97,21 +95,21 @@
                 <span class="workflow-mcp-row">
                   <label for="wf-mcp-token-type" class="workflow-mcp-label">3) Call MCP tools/list</label>
                   <select id="wf-mcp-token-type" class="workflow-mcp-select" aria-label="Token type for MCP call">
-                    <option value="obo-jwt" selected>OBO JWT</option>
-                    <option value="user-jwt">User JWT</option>
+                    <option value="obo-jwt" selected>OBO Token</option>
+                    <option value="user-jwt">Session Token</option>
                     <option value="no-jwt">No JWT</option>
                   </select>
                   <button id="wf-step-3" type="button">Call</button>
                 </span>
-                <button id="wf-clear-jwts" type="button" class="btn-clear-jwts">Clear User & OBO JWTs</button>
+                <button id="wf-clear-jwts" type="button" class="btn-clear-jwts">Clear Session & OBO Tokens</button>
               </div>
               <div class="workflow-results">
                 <article>
-                  <h4>User JWT</h4>
+                  <h4>Session Token</h4>
                   <pre id="wf-user-jwt">(not generated yet)</pre>
                 </article>
                 <article>
-                  <h4>OBO JWT</h4>
+                  <h4>OBO Token</h4>
                   <pre id="wf-obo-jwt">(not exchanged yet)</pre>
                 </article>
               </div>

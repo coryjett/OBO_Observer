@@ -92,6 +92,45 @@ if [ -n "${AGW_CLIENT_UUID}" ]; then
   fi
 fi
 
+# OBO Observer login client (authorization code flow; redirect for port-forward)
+OBO_OBSERVER_CLIENT_ID="obo-observer"
+OBO_OBSERVER_CLIENT_SECRET="obo-observer-secret"
+curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients" -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" -d "{
+  \"clientId\": \"${OBO_OBSERVER_CLIENT_ID}\",
+  \"enabled\": true,
+  \"clientAuthenticatorType\": \"client-secret\",
+  \"secret\": \"${OBO_OBSERVER_CLIENT_SECRET}\",
+  \"standardFlowEnabled\": true,
+  \"directAccessGrantsEnabled\": false,
+  \"redirectUris\": [\"http://localhost:8080/auth/callback\"],
+  \"webOrigins\": [\"http://localhost:8080\"],
+  \"attributes\": {\"post.logout.redirect.uris\": \"http://localhost:8080/\"}
+}" || true
+
+# Add may_act claim to obo-observer client so STS OBO exchange succeeds when user logs in via app (subject token must contain may_act for delegation)
+OBO_OBSERVER_CLIENT_UUID=$(curl -s "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients?clientId=${OBO_OBSERVER_CLIENT_ID}" -H "Authorization: Bearer ${ADMIN_TOKEN}" | jq -r '.[0].id // empty')
+if [ -n "${OBO_OBSERVER_CLIENT_UUID}" ]; then
+  OBO_HAS_MAY_ACT=$(curl -s "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OBO_OBSERVER_CLIENT_UUID}/protocol-mappers/models" -H "Authorization: Bearer ${ADMIN_TOKEN}" | jq -r '[.[] | select(.name == "may_act")] | length')
+  if [ "${OBO_HAS_MAY_ACT}" = "0" ]; then
+    MAY_ACT_VALUE='{"sub": "system:serviceaccount:obo-observer:obo-observer"}'
+    curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${KEYCLOAK_REALM}/clients/${OBO_OBSERVER_CLIENT_UUID}/protocol-mappers/models" \
+      -H "Authorization: Bearer ${ADMIN_TOKEN}" -H "Content-Type: application/json" \
+      -d "{
+        \"name\": \"may_act\",
+        \"protocol\": \"openid-connect\",
+        \"protocolMapper\": \"oidc-hardcoded-claim-mapper\",
+        \"config\": {
+          \"claim.name\": \"may_act\",
+          \"claim.value\": $(echo "${MAY_ACT_VALUE}" | jq -Rs .),
+          \"jsonType.label\": \"JSON\",
+          \"access.token.claim\": \"true\",
+          \"id.token.claim\": \"false\",
+          \"userinfo.token.claim\": \"false\"
+        }
+      }" || true
+  fi
+fi
+
 trap - EXIT
 kill ${KEYCLOAK_PF_PID} 2>/dev/null || true
 

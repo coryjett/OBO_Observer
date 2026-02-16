@@ -7,6 +7,7 @@ const state = {
   selectedId: null,
   healthy: false,
   logMode: null,
+  user: null, // { username, sub } when logged in via Keycloak
   workflow: {
     userJwt: "",
     oboJwt: "",
@@ -33,6 +34,9 @@ function savePersistedImpersonationOboJwt() {
 
 const refs = {
   status: document.getElementById("status"),
+  userDisplay: document.getElementById("user-display"),
+  loginLink: document.getElementById("login-link"),
+  logoutLink: document.getElementById("logout-link"),
   contextList: document.getElementById("context-list"),
   contextsClear: document.getElementById("contexts-clear"),
   headersRequestDisplay: document.getElementById("headers-request"),
@@ -47,23 +51,51 @@ const refs = {
   wfOboJwt: document.getElementById("wf-obo-jwt"),
   wfTools: document.getElementById("wf-tools"),
   agentgatewayLogs: document.getElementById("agentgateway-logs"),
-  wfStep1: document.getElementById("wf-step-1"),
   wfStep2: document.getElementById("wf-step-2"),
   wfStep3: document.getElementById("wf-step-3"),
   wfMcpTokenType: document.getElementById("wf-mcp-token-type"),
   wfClearJwts: document.getElementById("wf-clear-jwts"),
-  wfKeycloakUrl: document.getElementById("wf-keycloak-url"),
-  wfRealm: document.getElementById("wf-realm"),
-  wfClientId: document.getElementById("wf-client-id"),
-  wfClientSecret: document.getElementById("wf-client-secret"),
-  wfUsername: document.getElementById("wf-username"),
-  wfPassword: document.getElementById("wf-password"),
   wfStsUrl: document.getElementById("wf-sts-url"),
   wfExchangeMode: document.getElementById("wf-exchange-mode"),
   wfActorToken: document.getElementById("wf-actor-token"),
   wfActorTokenLabel: document.getElementById("wf-actor-token-label"),
   wfMcpUrl: document.getElementById("wf-mcp-url"),
 };
+
+/** Check session: set state.user and session token in Session Token from /api/me (no redirect). */
+async function checkAuth() {
+  try {
+    const res = await fetch("/api/me", { cache: "no-store", credentials: "include" });
+    if (res.ok) {
+      const data = await res.json();
+      state.user = data.username != null ? { username: data.username, sub: data.sub || "" } : null;
+      if (state.user && data.accessToken) {
+        state.workflow.userJwt = data.accessToken;
+        if (refs.wfUserJwt) refs.wfUserJwt.textContent = formatJwtDisplay(state.workflow.userJwt, "(empty session token)");
+      }
+    } else {
+      state.user = null;
+    }
+  } catch (_) {
+    state.user = null;
+  }
+  renderUser();
+}
+
+function renderUser() {
+  if (!refs.userDisplay || !refs.logoutLink) return;
+  if (state.user && state.user.username) {
+    refs.userDisplay.textContent = state.user.username;
+    refs.userDisplay.setAttribute("aria-hidden", "false");
+    refs.logoutLink.style.display = "";
+    if (refs.loginLink) refs.loginLink.style.display = "none";
+  } else {
+    refs.userDisplay.textContent = "";
+    refs.userDisplay.setAttribute("aria-hidden", "true");
+    refs.logoutLink.style.display = "none";
+    if (refs.loginLink) refs.loginLink.style.display = "";
+  }
+}
 
 async function fetchLogMode() {
   try {
@@ -189,11 +221,11 @@ function renderContexts(selected) {
     const usedUserJwt = inboundToken && !usedObo;
     const usedImpersonation = usedUserJwt && isImpersonationContext(event);
     const badge = usedObo
-      ? '<span class="obo-jwt-badge">OBO JWT</span>'
+      ? '<span class="obo-jwt-badge">OBO Token</span>'
       : usedImpersonation
         ? '<span class="impersonation-jwt-badge">Impersonation JWT</span>'
         : usedUserJwt
-          ? '<span class="jwt-badge">User JWT</span>'
+          ? '<span class="jwt-badge">Session Token</span>'
           : '';
     let timeStr = "";
     if (event.timestamp) {
@@ -451,8 +483,12 @@ function renderTrace(selected) {
   for (const node of nodes) {
     drawNode(svg, node);
   }
-  if (isEventBlocked(selected) && nodes[1]) {
-    drawBlockedOverlay(svg, nodes[1]);
+  if (nodes[1]) {
+    if (isEventBlocked(selected)) {
+      drawBlockedOverlay(svg, nodes[1]);
+    } else {
+      drawSuccessOverlay(svg, nodes[1]);
+    }
   }
 
   // ViewBox centered on nodes (y=130); equal padding above and below
@@ -547,6 +583,37 @@ function drawBlockedOverlay(svg, node) {
   line.setAttribute("stroke-width", "4");
   line.setAttribute("stroke-linecap", "round");
   g.appendChild(line);
+
+  svg.appendChild(g);
+}
+
+function drawSuccessOverlay(svg, node) {
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  const size = 52;
+  const r = size / 2;
+  const offsetY = 38;
+  g.setAttribute("transform", `translate(${node.x},${node.y + offsetY})`);
+  g.setAttribute("class", "trace-success-overlay");
+
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  title.textContent = "Call succeeded";
+  g.appendChild(title);
+
+  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  circle.setAttribute("r", String(r));
+  circle.setAttribute("fill", "#2ed18c");
+  circle.setAttribute("stroke", "#fff");
+  circle.setAttribute("stroke-width", "3");
+  g.appendChild(circle);
+
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M -14,-2 L -4,10 L 16,-14");
+  path.setAttribute("stroke", "#fff");
+  path.setAttribute("stroke-width", "4");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("fill", "none");
+  g.appendChild(path);
 
   svg.appendChild(g);
 }
@@ -736,24 +803,17 @@ function setWorkflowStatus(message, isError = false) {
 }
 
 function setWorkflowBusy(isBusy) {
-  refs.wfStep1.disabled = isBusy;
-  refs.wfStep2.disabled = isBusy;
-  refs.wfStep3.disabled = isBusy;
+  if (refs.wfStep2) refs.wfStep2.disabled = isBusy;
+  if (refs.wfStep3) refs.wfStep3.disabled = isBusy;
   if (refs.wfMcpTokenType) refs.wfMcpTokenType.disabled = isBusy;
 }
 
 function collectWorkflowInputs() {
   return {
-    keycloakUrl: refs.wfKeycloakUrl.value.trim(),
-    realm: refs.wfRealm.value.trim(),
-    clientId: refs.wfClientId.value.trim(),
-    clientSecret: refs.wfClientSecret.value,
-    username: refs.wfUsername.value.trim(),
-    password: refs.wfPassword.value,
-    stsUrl: refs.wfStsUrl.value.trim(),
+    stsUrl: refs.wfStsUrl && refs.wfStsUrl.value.trim(),
     exchangeMode: (refs.wfExchangeMode && refs.wfExchangeMode.value) || "delegation",
-    actorToken: refs.wfActorToken.value.trim(),
-    mcpUrl: refs.wfMcpUrl.value.trim(),
+    actorToken: refs.wfActorToken && refs.wfActorToken.value.trim(),
+    mcpUrl: refs.wfMcpUrl && refs.wfMcpUrl.value.trim(),
   };
 }
 
@@ -762,6 +822,7 @@ async function postJSON(url, body) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    credentials: "include",
   });
 
   const payload = await response.json().catch(() => ({}));
@@ -774,42 +835,19 @@ async function postJSON(url, body) {
   return payload;
 }
 
-async function handleStep1() {
-  setWorkflowBusy(true);
-  setWorkflowStatus("Generating user JWT...");
-  try {
-    const input = collectWorkflowInputs();
-    const payload = await postJSON("/api/obo/user-jwt", {
-      keycloakUrl: input.keycloakUrl,
-      realm: input.realm,
-      clientId: input.clientId,
-      clientSecret: input.clientSecret,
-      username: input.username,
-      password: input.password,
-    });
-
-    state.workflow.userJwt = payload.userJwt || "";
-    refs.wfUserJwt.textContent = formatJwtDisplay(state.workflow.userJwt, "(empty user JWT)");
-    setWorkflowStatus("Step 1 complete: user JWT generated.");
-  } catch (error) {
-    setWorkflowStatus(`Step 1 failed: ${error.message}`, true);
-  } finally {
-    setWorkflowBusy(false);
-  }
-}
-
 async function handleStep2() {
   setWorkflowBusy(true);
-  setWorkflowStatus("Exchanging user JWT via STS...");
+  setWorkflowStatus("Exchanging token via STS...");
   try {
     const input = collectWorkflowInputs();
-    if (!state.workflow.userJwt) {
-      throw new Error("Generate user JWT first");
+    const useSessionToken = state.user && !state.workflow.userJwt;
+    if (!useSessionToken && !state.workflow.userJwt) {
+      throw new Error("Log in first (top right) to use Exchange via STS");
     }
 
     const payload = await postJSON("/api/obo/exchange", {
       stsUrl: input.stsUrl,
-      userJwt: state.workflow.userJwt,
+      userJwt: state.workflow.userJwt || "",
       exchangeMode: input.exchangeMode,
       actorToken: input.actorToken,
     });
@@ -820,8 +858,8 @@ async function handleStep2() {
       state.workflow.impersonationOboJwt = state.workflow.oboJwt;
       savePersistedImpersonationOboJwt();
     }
-    refs.wfOboJwt.textContent = formatJwtDisplay(state.workflow.oboJwt, "(empty OBO JWT)");
-    setWorkflowStatus("Step 2 complete: STS returned OBO JWT.");
+    refs.wfOboJwt.textContent = formatJwtDisplay(state.workflow.oboJwt, "(empty OBO Token)");
+    setWorkflowStatus("Step 2 complete: STS returned OBO Token.");
   } catch (error) {
     setWorkflowStatus(`Step 2 failed: ${error.message}`, true);
   } finally {
@@ -837,7 +875,7 @@ async function callMCPTools(tokenType) {
   const useOboJwt = tokenType === "obo-jwt";
   const oboJwt = useOboJwt ? (state.workflow.oboJwt || "") : "";
   const userJwt = useUserJwt ? (state.workflow.userJwt || "") : "";
-  const labels = { "no-jwt": "No JWT", "user-jwt": "User JWT", "obo-jwt": "OBO JWT" };
+  const labels = { "no-jwt": "No JWT", "user-jwt": "Session Token", "obo-jwt": "OBO Token" };
   const label = labels[tokenType] || tokenType;
   const hasToken = tokenType === "no-jwt" ? false : tokenType === "user-jwt" ? !!userJwt : !!oboJwt;
   setWorkflowStatus(
@@ -870,11 +908,27 @@ async function callMCPTools(tokenType) {
       tokenType === "no-jwt"
         ? "(No JWT sent; gateway returns 401.)"
         : tokenType === "user-jwt"
-          ? "(User JWT is not accepted by the gateway; use step 2 to get an OBO JWT.)"
+          ? "(Session Token is not accepted by the gateway; use step 2 to get an OBO Token.)"
           : "(Call with No JWT to demonstrate 401 Unauthorized.)";
     refs.wfTools.textContent = `Error: ${error.message}\n\n${hint}`;
   } finally {
     setWorkflowBusy(false);
+    // Refresh once, then again after a short delay so the new request has time to show up in logs
+    await poll();
+    selectMostRecentContext();
+    setTimeout(async () => {
+      await poll();
+      selectMostRecentContext();
+    }, 2000);
+  }
+}
+
+function selectMostRecentContext() {
+  const httpEvents = state.events.filter(isHttpEvent);
+  const mostRecent = httpEvents.length > 0 ? httpEvents[0] : state.events[0];
+  if (mostRecent) {
+    state.selectedId = mostRecent.id;
+    render();
   }
 }
 
@@ -892,7 +946,7 @@ function handleClearJWTs() {
   state.workflow.blockedByPolicy = false;
   refs.wfUserJwt.textContent = "(not generated yet)";
   refs.wfOboJwt.textContent = "(not exchanged yet)";
-  setWorkflowStatus("User and OBO JWTs cleared. You can run step 3 without a JWT to see 401.");
+  setWorkflowStatus("Session and OBO Tokens cleared. You can run step 3 without a JWT to see 401.");
 }
 
 async function handleContextsClear() {
@@ -915,8 +969,7 @@ function updateExchangeModeUI() {
 }
 
 function initWorkflow() {
-  refs.wfStep1.addEventListener("click", handleStep1);
-  refs.wfStep2.addEventListener("click", handleStep2);
+  if (refs.wfStep2) refs.wfStep2.addEventListener("click", handleStep2);
   refs.wfStep3.addEventListener("click", handleStep3);
   if (refs.wfClearJwts) refs.wfClearJwts.addEventListener("click", handleClearJWTs);
   if (refs.wfExchangeMode) {
@@ -928,8 +981,12 @@ function initWorkflow() {
 if (refs.contextsClear) {
   refs.contextsClear.addEventListener("click", handleContextsClear);
 }
-loadPersistedImpersonationOboJwt();
-initWorkflow();
-poll();
-setInterval(poll, POLL_MS);
-startLogStream();
+
+(async function init() {
+  await checkAuth();
+  loadPersistedImpersonationOboJwt();
+  initWorkflow();
+  poll();
+  setInterval(poll, POLL_MS);
+  startLogStream();
+})();

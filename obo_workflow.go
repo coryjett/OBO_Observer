@@ -88,8 +88,12 @@ func handleExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.STSURL == "" || req.UserJWT == "" {
-		writeError(w, http.StatusBadRequest, "missing required fields")
+	userJWT := strings.TrimSpace(req.UserJWT)
+	if userJWT == "" {
+		userJWT = getSessionToken(r)
+	}
+	if req.STSURL == "" || userJWT == "" {
+		writeError(w, http.StatusBadRequest, "missing required fields (STS URL and user token; login first or provide userJwt)")
 		return
 	}
 
@@ -100,7 +104,7 @@ func handleExchange(w http.ResponseWriter, r *http.Request) {
 
 	form := url.Values{}
 	form.Set("grant_type", "urn:ietf:params:oauth:grant-type:token-exchange")
-	form.Set("subject_token", req.UserJWT)
+	form.Set("subject_token", userJWT)
 	form.Set("subject_token_type", "urn:ietf:params:oauth:token-type:jwt")
 
 	if exchangeMode == "delegation" {
@@ -120,7 +124,7 @@ func handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	// impersonation: subject_token only (no actor_token)
 
-	body, status, err := postForm(strings.TrimRight(req.STSURL, "/")+"/token", form, "Bearer "+req.UserJWT)
+	body, status, err := postForm(strings.TrimRight(req.STSURL, "/")+"/token", form, "Bearer "+userJWT)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "sts exchange failed: "+err.Error())
 		return
@@ -175,9 +179,9 @@ func handleMCPTools(w http.ResponseWriter, r *http.Request) {
 		}
 		if statusCode == http.StatusUnauthorized {
 			if req.UseUserJWT {
-				writeError(w, http.StatusUnauthorized, "MCP returned 401 Unauthorized (User JWT not accepted; gateway expects OBO token). Run step 2 to exchange for an OBO JWT.")
+				writeError(w, http.StatusUnauthorized, "MCP returned 401 Unauthorized (Session Token not accepted; gateway expects OBO token). Run step 2 to exchange for an OBO Token.")
 			} else {
-				writeError(w, http.StatusUnauthorized, "MCP returned 401 Unauthorized (no or invalid OBO token). Run steps 1 and 2 to get an OBO JWT.")
+				writeError(w, http.StatusUnauthorized, "MCP returned 401 Unauthorized (no or invalid OBO token). Run steps 1 and 2 to get an OBO Token.")
 			}
 			return
 		}

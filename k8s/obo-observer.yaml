@@ -119,6 +119,19 @@ spec:
               value: "500"
             - name: EVENT_BUFFER_SIZE
               value: "800"
+            # OAuth2 / Keycloak login (KEYCLOAK_URL = browser-reachable; KEYCLOAK_INTERNAL_URL = in-cluster for token exchange)
+            - name: KEYCLOAK_URL
+              value: "http://localhost:8081"
+            - name: KEYCLOAK_INTERNAL_URL
+              value: "http://keycloak.keycloak.svc.cluster.local:8080"
+            - name: KEYCLOAK_REALM
+              value: "oidc-realm"
+            - name: OAUTH2_CLIENT_ID
+              value: "obo-observer"
+            - name: OAUTH2_CLIENT_SECRET
+              value: "obo-observer-secret"
+            - name: BASE_URL
+              value: "http://localhost:8080"
 ---
 apiVersion: v1
 kind: Service
