@@ -132,6 +132,9 @@ spec:
               value: "obo-observer-secret"
             - name: BASE_URL
               value: "http://localhost:8080"
+            # Agent Chat: Responses API via gateway (path /openai)
+            - name: OPENAI_BASE_URL
+              value: "http://enterprise-agentgateway.default.svc.cluster.local/openai"
 ---
 apiVersion: v1
 kind: Service

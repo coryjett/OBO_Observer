@@ -15,7 +15,11 @@ const state = {
     /** OBO JWT from the last impersonation exchange; used only for "Impersonation JWT" badge. Persisted so refresh keeps labels. */
     impersonationOboJwt: "",
     blockedByPolicy: false,
+    stsUrl: "",
+    mcpUrl: "",
+    actorToken: "",
   },
+  agentChat: { messages: [] },
 };
 
 function loadPersistedImpersonationOboJwt() {
@@ -49,17 +53,22 @@ const refs = {
   wfStatus: document.getElementById("wf-status"),
   wfUserJwt: document.getElementById("wf-user-jwt"),
   wfOboJwt: document.getElementById("wf-obo-jwt"),
+  wfSessionTokenCheck: document.getElementById("wf-session-token-check"),
+  wfOboTokenCheck: document.getElementById("wf-obo-token-check"),
   wfTools: document.getElementById("wf-tools"),
   agentgatewayLogs: document.getElementById("agentgateway-logs"),
   wfStep2: document.getElementById("wf-step-2"),
   wfStep3: document.getElementById("wf-step-3"),
   wfMcpTokenType: document.getElementById("wf-mcp-token-type"),
   wfClearJwts: document.getElementById("wf-clear-jwts"),
-  wfStsUrl: document.getElementById("wf-sts-url"),
+  wfTokensToggle: document.getElementById("wf-tokens-toggle"),
+  wfTokensWrapper: document.getElementById("wf-tokens-wrapper"),
   wfExchangeMode: document.getElementById("wf-exchange-mode"),
-  wfActorToken: document.getElementById("wf-actor-token"),
-  wfActorTokenLabel: document.getElementById("wf-actor-token-label"),
-  wfMcpUrl: document.getElementById("wf-mcp-url"),
+  agentOpenaiToken: document.getElementById("agent-openai-token"),
+  agentChatMessages: document.getElementById("agent-chat-messages"),
+  agentChatInput: document.getElementById("agent-chat-input"),
+  agentChatSend: document.getElementById("agent-chat-send"),
+  agentChatError: document.getElementById("agent-chat-error"),
 };
 
 /** Check session: set state.user and session token in Session Token from /api/me (no redirect). */
@@ -79,6 +88,7 @@ async function checkAuth() {
   } catch (_) {
     state.user = null;
   }
+  updateTokenCheckmarks();
   renderUser();
 }
 
@@ -97,12 +107,31 @@ function renderUser() {
   }
 }
 
+function updateTokenCheckmarks() {
+  if (refs.wfSessionTokenCheck) {
+    const has = !!(state.workflow.userJwt && state.workflow.userJwt.trim());
+    refs.wfSessionTokenCheck.textContent = has ? "\u2713" : "";
+    refs.wfSessionTokenCheck.setAttribute("aria-hidden", has ? "false" : "true");
+  }
+  if (refs.wfOboTokenCheck) {
+    const has = !!(state.workflow.oboJwt && state.workflow.oboJwt.trim());
+    refs.wfOboTokenCheck.textContent = has ? "\u2713" : "";
+    refs.wfOboTokenCheck.setAttribute("aria-hidden", has ? "false" : "true");
+  }
+}
+
 async function fetchLogMode() {
   try {
     const res = await fetch("/api/info", { cache: "no-store" });
     if (res.ok) {
       const data = await res.json();
       state.logMode = data.log_mode || null;
+      if (data.sts_url != null) state.workflow.stsUrl = data.sts_url;
+      if (data.mcp_url != null) state.workflow.mcpUrl = data.mcp_url;
+      if (data.actor_token != null) state.workflow.actorToken = data.actor_token;
+      if (data.openai_api_key && refs.agentOpenaiToken && !refs.agentOpenaiToken.value.trim()) {
+        refs.agentOpenaiToken.value = data.openai_api_key;
+      }
     }
   } catch (_) {
     state.logMode = null;
@@ -220,13 +249,16 @@ function renderContexts(selected) {
     const usedObo = inboundToken && isOboToken(inboundToken);
     const usedUserJwt = inboundToken && !usedObo;
     const usedImpersonation = usedUserJwt && isImpersonationContext(event);
+    const openAIContext = isOpenAIContext(event);
     const badge = usedObo
       ? '<span class="obo-jwt-badge">OBO Token</span>'
-      : usedImpersonation
-        ? '<span class="impersonation-jwt-badge">Impersonation JWT</span>'
-        : usedUserJwt
-          ? '<span class="jwt-badge">Session Token</span>'
-          : '';
+      : openAIContext && inboundToken
+        ? '<span class="openai-api-badge">OpenAI API key</span>'
+        : usedImpersonation
+          ? '<span class="impersonation-jwt-badge">Impersonation JWT</span>'
+          : usedUserJwt
+            ? '<span class="jwt-badge">Session Token</span>'
+            : '';
     let timeStr = "";
     if (event.timestamp) {
       const d = new Date(event.timestamp);
@@ -237,10 +269,12 @@ function renderContexts(selected) {
     button.innerHTML = `
       <div class="path-row">
         <span class="path">${escapeHtml(event.context || "(context missing)")}</span>
-        ${badge}
       </div>
       <div class="small">${escapeHtml(event.resolvedClient || event.client || "unknown source")} → ${escapeHtml(event.resolvedBackendService || formatBackendDisplay(event.backendTarget) || event.route || "unknown destination")}</div>
-      <div class="small context-time">${escapeHtml(timeStr || "—")}</div>
+      <div class="context-footer">
+        <span class="small context-time">${escapeHtml(timeStr || "—")}</span>
+        ${badge}
+      </div>
     `;
 
     li.appendChild(button);
@@ -720,6 +754,13 @@ function isOboToken(token) {
   return payload != null && "act" in payload;
 }
 
+/** True if this context is an OpenAI API request (path indicates Completions/Responses route). */
+function isOpenAIContext(event) {
+  if (!event?.context) return false;
+  const ctx = String(event.context).toLowerCase();
+  return ctx.includes("openai") || ctx.includes("v1/chat/completions") || ctx.includes("v1/responses");
+}
+
 /** True if this context used an impersonation token (matches the OBO JWT we got from an impersonation exchange). */
 function isImpersonationContext(event) {
   if (!event) return false;
@@ -767,12 +808,22 @@ function splitRequestResponseHeaders(headers) {
   return { requestHeaders, responseHeaders };
 }
 
-/** Format headers map as key: value lines (sorted by key). Returns null for empty. */
+/** Format headers map as key: value lines (sorted by key). Returns null for empty. Authorization value is truncated to 20 chars. */
 function formatHeaders(headers) {
   if (!headers || typeof headers !== "object") return null;
   const keys = Object.keys(headers).sort();
   if (keys.length === 0) return "(none in log)";
-  return keys.map((k) => `${k}: ${headers[k]}`).join("\n");
+  return keys
+    .map((k) => {
+      let v = headers[k];
+      const keyLower = k.toLowerCase();
+      const isAuth = keyLower === "authorization" || keyLower.endsWith(".authorization");
+      if (typeof v === "string" && isAuth && v.length > 20) {
+        v = v.slice(0, 20) + "...";
+      }
+      return `${k}: ${v}`;
+    })
+    .join("\n");
 }
 
 const WORKFLOW_TOAST_DURATION_MS = 10000;
@@ -810,10 +861,10 @@ function setWorkflowBusy(isBusy) {
 
 function collectWorkflowInputs() {
   return {
-    stsUrl: refs.wfStsUrl && refs.wfStsUrl.value.trim(),
+    stsUrl: (state.workflow.stsUrl || "").trim(),
     exchangeMode: (refs.wfExchangeMode && refs.wfExchangeMode.value) || "delegation",
-    actorToken: refs.wfActorToken && refs.wfActorToken.value.trim(),
-    mcpUrl: refs.wfMcpUrl && refs.wfMcpUrl.value.trim(),
+    actorToken: (state.workflow.actorToken || "").trim(),
+    mcpUrl: (state.workflow.mcpUrl || "").trim(),
   };
 }
 
@@ -858,7 +909,8 @@ async function handleStep2() {
       state.workflow.impersonationOboJwt = state.workflow.oboJwt;
       savePersistedImpersonationOboJwt();
     }
-    refs.wfOboJwt.textContent = formatJwtDisplay(state.workflow.oboJwt, "(empty OBO Token)");
+    if (refs.wfOboJwt) refs.wfOboJwt.textContent = formatJwtDisplay(state.workflow.oboJwt, "(empty OBO Token)");
+    updateTokenCheckmarks();
     setWorkflowStatus("Step 2 complete: STS returned OBO Token.");
   } catch (error) {
     setWorkflowStatus(`Step 2 failed: ${error.message}`, true);
@@ -938,15 +990,14 @@ async function handleStep3() {
 }
 
 function handleClearJWTs() {
-  state.workflow.userJwt = "";
   state.workflow.oboJwt = "";
   state.workflow.lastExchangeMode = "";
   state.workflow.impersonationOboJwt = "";
   savePersistedImpersonationOboJwt();
   state.workflow.blockedByPolicy = false;
-  refs.wfUserJwt.textContent = "(not generated yet)";
-  refs.wfOboJwt.textContent = "(not exchanged yet)";
-  setWorkflowStatus("Session and OBO Tokens cleared. You can run step 3 without a JWT to see 401.");
+  if (refs.wfOboJwt) refs.wfOboJwt.textContent = "(not exchanged yet)";
+  updateTokenCheckmarks();
+  setWorkflowStatus("OBO Token cleared.");
 }
 
 async function handleContextsClear() {
@@ -960,21 +1011,84 @@ async function handleContextsClear() {
 }
 
 function updateExchangeModeUI() {
-  const mode = refs.wfExchangeMode && refs.wfExchangeMode.value;
-  const label = refs.wfActorTokenLabel;
-  if (label) label.style.display = mode === "delegation" ? "" : "none";
-  // Clear OBO JWT when exchange mode changes (it was obtained with the previous mode).
   state.workflow.oboJwt = "";
   if (refs.wfOboJwt) refs.wfOboJwt.textContent = "(not exchanged yet)";
+  updateTokenCheckmarks();
+}
+
+function renderAgentChat() {
+  if (!refs.agentChatMessages) return;
+  refs.agentChatMessages.innerHTML = "";
+  for (const m of state.agentChat.messages) {
+    const div = document.createElement("div");
+    div.className = "agent-chat-message agent-chat-message--" + m.role;
+    const label = m.role === "user" ? "You" : "Assistant";
+    div.textContent = label + ": " + (m.content || "").trim();
+    refs.agentChatMessages.appendChild(div);
+  }
+  refs.agentChatMessages.scrollTop = refs.agentChatMessages.scrollHeight;
+}
+
+async function handleAgentChatSend() {
+  const input = refs.agentChatInput;
+  const sendBtn = refs.agentChatSend;
+  const errEl = refs.agentChatError;
+  const msg = (input && input.value || "").trim();
+  if (!msg) return;
+  const mcpUrl = (state.workflow.mcpUrl || "").trim();
+  if (!mcpUrl) {
+    if (errEl) errEl.textContent = "Set MCP_URL in .env and restart the app.";
+    return;
+  }
+  const openaiKey = (refs.agentOpenaiToken && refs.agentOpenaiToken.value || "").trim();
+  if (!openaiKey) {
+    if (errEl) errEl.textContent = "Enter your OpenAI API key first.";
+    return;
+  }
+  if (errEl) errEl.textContent = "";
+  state.agentChat.messages.push({ role: "user", content: msg });
+  if (input) input.value = "";
+  renderAgentChat();
+  if (sendBtn) sendBtn.disabled = true;
+  try {
+    const payload = await postJSON("/api/agent-chat", {
+      message: msg,
+      openaiApiKey: openaiKey,
+      mcpUrl,
+      oboToken: (state.workflow.oboJwt || "").trim(),
+    });
+    const text = (payload.text || "").trim();
+    state.agentChat.messages.push({ role: "assistant", content: text || "(no response)" });
+  } catch (err) {
+    state.agentChat.messages.push({ role: "assistant", content: "Error: " + (err.message || String(err)) });
+    if (errEl) errEl.textContent = err.message || String(err);
+  }
+  renderAgentChat();
+  if (sendBtn) sendBtn.disabled = false;
 }
 
 function initWorkflow() {
   if (refs.wfStep2) refs.wfStep2.addEventListener("click", handleStep2);
-  refs.wfStep3.addEventListener("click", handleStep3);
+  if (refs.wfStep3) refs.wfStep3.addEventListener("click", handleStep3);
   if (refs.wfClearJwts) refs.wfClearJwts.addEventListener("click", handleClearJWTs);
+  if (refs.wfTokensToggle && refs.wfTokensWrapper) {
+    refs.wfTokensToggle.addEventListener("click", function () {
+      const collapsed = refs.wfTokensWrapper.classList.toggle("is-collapsed");
+      refs.wfTokensToggle.setAttribute("aria-expanded", String(!collapsed));
+    });
+  }
   if (refs.wfExchangeMode) {
     refs.wfExchangeMode.addEventListener("change", updateExchangeModeUI);
     updateExchangeModeUI();
+  }
+  if (refs.wfUserJwt) refs.wfUserJwt.textContent = state.workflow.userJwt ? formatJwtDisplay(state.workflow.userJwt, "(empty session token)") : "(not generated yet)";
+  if (refs.wfOboJwt) refs.wfOboJwt.textContent = state.workflow.oboJwt ? formatJwtDisplay(state.workflow.oboJwt, "(empty OBO Token)") : "(not exchanged yet)";
+  updateTokenCheckmarks();
+  if (refs.agentChatSend) refs.agentChatSend.addEventListener("click", handleAgentChatSend);
+  if (refs.agentChatInput) {
+    refs.agentChatInput.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") handleAgentChatSend();
+    });
   }
 }
 
@@ -984,8 +1098,10 @@ if (refs.contextsClear) {
 
 (async function init() {
   await checkAuth();
+  await fetchLogMode();
   loadPersistedImpersonationOboJwt();
   initWorkflow();
+  updateTokenCheckmarks();
   poll();
   setInterval(poll, POLL_MS);
   startLogStream();

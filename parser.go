@@ -1,8 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"regexp"
 	"strings"
 	"time"
@@ -102,7 +106,15 @@ func ParseLine(raw string) (Event, bool) {
 
 	// Expose all parsed fields as headers so the UI can show everything received by Agentgateway (no duplicate inbound_jwt; keep authorization only)
 	event.Headers = make(map[string]string, len(fields))
+	bodyKeys := map[string]bool{
+		"response.body": true, "response_body": true, "response_body_content": true,
+		"request.body": true, "request_body": true, "body": true,
+	}
 	for k, v := range fields {
+		keyLower := strings.ToLower(k)
+		if bodyKeys[keyLower] && v != "" {
+			v = tryDecompressBodyValue(v)
+		}
 		event.Headers[k] = v
 	}
 
@@ -135,6 +147,35 @@ func parseTimestamp(fields map[string]string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// tryDecompressBodyValue returns decompressed UTF-8 if v is base64-encoded gzip; otherwise returns v unchanged.
+func tryDecompressBodyValue(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return v
+	}
+	raw, err := base64.StdEncoding.DecodeString(v)
+	if err != nil {
+		// try URL-safe base64 (e.g. from JSON)
+		raw, err = base64.URLEncoding.DecodeString(v)
+		if err != nil {
+			return v
+		}
+	}
+	if len(raw) < 2 || raw[0] != 0x1f || raw[1] != 0x8b {
+		return v
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		return v
+	}
+	defer zr.Close()
+	out, err := io.ReadAll(zr)
+	if err != nil {
+		return v
+	}
+	return string(out)
 }
 
 // flattenJSONIntoFields writes JSON object keys into fields with dot-separated names (e.g. http.status).

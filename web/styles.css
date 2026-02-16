@@ -296,6 +296,18 @@ body {
   animation: obo-jwt-glow 2s ease-in-out infinite;
 }
 
+.openai-api-badge {
+  flex-shrink: 0;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(42, 184, 255, 0.15);
+  color: #7dd3fc;
+  border: 1px solid rgba(42, 184, 255, 0.4);
+}
+
 .impersonation-jwt-badge {
   flex-shrink: 0;
   font-size: 0.65rem;
@@ -331,10 +343,26 @@ body {
   font-size: 0.75rem;
 }
 
+.context-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .context-time {
-  margin-top: 2px;
+  margin-top: 0;
   font-size: 0.7rem;
   opacity: 0.85;
+  flex-shrink: 0;
+}
+
+.context-footer .jwt-badge,
+.context-footer .obo-jwt-badge,
+.context-footer .impersonation-jwt-badge,
+.context-footer .openai-api-badge {
+  margin-left: auto;
 }
 
 .card.trace {
@@ -709,6 +737,163 @@ body {
   color: #cfe0fb;
 }
 
+.workflow-tokens-toggle-row {
+  margin-bottom: 6px;
+}
+
+.workflow-tokens-toggle {
+  background: none;
+  border: none;
+  color: #9ab0d4;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 2px 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.workflow-tokens-toggle:hover {
+  color: #bdd2f4;
+}
+
+.workflow-tokens-toggle-icon {
+  font-size: 0.7rem;
+  transition: transform 0.2s ease;
+}
+
+.workflow-tokens-wrapper.is-collapsed .workflow-tokens-toggle-icon {
+  transform: rotate(-90deg);
+}
+
+.workflow-tokens-wrapper.is-collapsed .workflow-token-body {
+  display: none;
+}
+
+.workflow-results--tokens-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.workflow-token-heading {
+  margin: 0 0 6px;
+  color: #bdd2f4;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.workflow-token-body {
+  margin: 0;
+}
+
+.workflow-token-check {
+  color: var(--ok);
+  font-size: 0.85em;
+  margin-left: 4px;
+}
+
+.workflow-results--tools-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.workflow-tools-panel h4,
+.workflow-agent-chat-panel h4 {
+  margin: 0 0 6px;
+}
+
+.workflow-agent-chat-panel .agent-chat-help {
+  font-size: 0.72rem;
+  color: #9ab0d4;
+  margin: 0 0 8px;
+}
+
+.agent-chat-token-row {
+  margin-bottom: 8px;
+}
+
+.agent-chat-token-row label {
+  display: block;
+  font-size: 0.74rem;
+  color: #bdd2f4;
+  margin-bottom: 2px;
+}
+
+.agent-chat-token-row input {
+  width: 100%;
+  max-width: 320px;
+  padding: 6px 8px;
+  font-size: 0.8rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: #cfe0fb;
+  border-radius: 4px;
+}
+
+.agent-chat-messages {
+  min-height: 80px;
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px;
+  font-size: 0.8rem;
+  background: #070c14;
+  border: 1px solid #1d2d48;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.agent-chat-message {
+  margin-bottom: 6px;
+}
+
+.agent-chat-message--user {
+  color: #9ab0d4;
+}
+
+.agent-chat-message--assistant {
+  color: #cfe0fb;
+}
+
+.agent-chat-input-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.agent-chat-input-row input {
+  flex: 1;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: #cfe0fb;
+  border-radius: 4px;
+}
+
+.agent-chat-input-row button {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  background: var(--accent);
+  color: #0a0f18;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.agent-chat-input-row button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-chat-error {
+  font-size: 0.74rem;
+  color: #ff9ca4;
+  min-height: 1.2em;
+}
+
 .agentgateway-logs-details {
   margin-top: 16px;
   padding-top: 12px;
@@ -759,6 +944,11 @@ body {
     flex-direction: column;
     height: auto;
     min-height: calc(100vh - 60px);
+  }
+
+  .workflow-results--tools-split,
+  .workflow-results--tokens-split {
+    grid-template-columns: 1fr;
   }
 
   .contexts {

@@ -1,13 +1,15 @@
 # OBO Observer
 
-Visualizes Agentgateway proxy activity: contexts hit, trace graph (client → proxy → backend), and request headers. Dark UI.
-
-- **Log source:** `LOG_MODE=kubernetes` (default) or `LOG_MODE=file` with `LOG_FILE_PATH=/path/to/access.log`
-- **Parser:** JSON and key/value access logs
+Observe [Solo Agentgateway](https://docs.solo.io/agentgateway/) proxy traffic: **contexts hit**, **trace graph** (client → proxy → backend), and request/response headers. Includes an interactive OBO flow (login, STS exchange, MCP tools) and **Agent Chat** (OpenAI Chat Completions API via the gateway).
 
 ![OBO Observer](images/image.png)
 
-## Local run
+## Features
+
+- **Log source:** `LOG_MODE=kubernetes` (default) or `LOG_MODE=file` with `LOG_FILE_PATH`
+- **Parser:** JSON and key/value access logs
+
+## Run locally
 
 ```bash
 go run .
@@ -15,64 +17,52 @@ go run .
 
 Open **http://localhost:8080**.
 
-## Container build
+### Container build
 
 ```bash
 docker build -t obo-observer:latest .
-# Apple Silicon:  docker build --build-arg TARGETARCH=arm64 -t obo-observer:latest .
 ```
+
+Apple Silicon: use `--platform linux/arm64` or ensure your Docker build uses arm64 so the image matches your cluster.
 
 ## Demo environment
 
-Prereqs: `kubectl`, `helm`, `curl`, `jq`. Set your Solo license key:
+**Prereqs:** `kubectl`, `helm`, `curl`, `jq`, and a Solo license key.
 
 ```bash
 export AGENTGATEWAY_LICENSE_KEY="<your-license-key>"
 ./demo_env.sh
 ```
 
-Optional env: `KUBE_CONTEXT`, `ENTERPRISE_AGENTGATEWAY_VERSION`, `GATEWAY_API_VERSION`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`. See `.env.example`.
+Installs Keycloak, Agentgateway, kagent-tools, Gateways, MCP route, and the OpenAI route (Completions + Responses). Overrides: see `.env` (e.g. `KUBE_CONTEXT`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`).
 
-**Default login** — Keycloak (and the OBO Observer app when using the demo) uses this user:
-
-| Username | Password |
-|----------|----------|
-| `testuser` | `testuser` |
-
-**UI — OBO flow:** When Keycloak login is configured, opening the app redirects to Keycloak; after login your username appears in the top right and **Exchange via STS** uses your session token. Otherwise: (1) Generate User JWT, (2) Exchange via STS, (3) Call MCP tools/list. UI uses in-cluster URLs when running in Kubernetes.
-
-**Optional: Keycloak login** — Set `KEYCLOAK_URL`, `OAUTH2_CLIENT_ID`, `OAUTH2_CLIENT_SECRET`, and `BASE_URL` (e.g. `http://localhost:8080`). Create a Keycloak client with the same client ID, secret, and redirect URI `{BASE_URL}/auth/callback`. Optionally set `SESSION_SECRET` (32 bytes) for cookie encryption and `KEYCLOAK_REALM` (default `oidc-realm`).
+- **Keycloak:** user `testuser` / `testuser`
+- **OBO in UI:** 1) Log in (top right), 2) Exchange via STS, 3) Call MCP tools/list. Agent Chat uses the same MCP URL and OBO token.
+- **Redirect login:** set `KEYCLOAK_URL`, `OAUTH2_*`, `BASE_URL` and add client redirect `{BASE_URL}/auth/callback`.
 
 ## Deploy to Kubernetes
 
-1. Create the `agentgateway-system` namespace if it doesn't exist (required by the manifest's RBAC):
+1. **Namespace** (if not already created by demo):
 
    ```bash
    kubectl create namespace agentgateway-system
    ```
 
-2. Load the image into your cluster (manifest uses `imagePullPolicy: Never`):
+2. **Load image** (manifest uses `imagePullPolicy: Never`):
 
    ```bash
-   # k3d
    k3d image import obo-observer:latest -c <cluster-name>
-   # kind
-   kind load docker-image obo-observer:latest
+   # or: kind load docker-image obo-observer:latest
    ```
 
-3. Apply the manifest:
+3. **Apply and port-forward:**
 
    ```bash
    kubectl apply -f k8s/obo-observer.yaml
-   ```
-
-4. Port-forward and open the UI:
-
-   ```bash
    kubectl port-forward -n obo-observer svc/obo-observer 8080:80
    ```
 
-Then **http://localhost:8080**. For other clusters: push image to a registry and set `image` / `imagePullPolicy` in the manifest.
+Open **http://localhost:8080**. For other clusters, push the image to a registry and set `image` and `imagePullPolicy` in the manifest.
 
 ## Cleanup
 
@@ -83,7 +73,7 @@ pkill -f "port-forward.*8080:80"
 kubectl delete -f k8s/obo-observer.yaml
 ```
 
-**Demo environment** (Keycloak, Agentgateway, kagent-tools, Gateways):
+**Full demo** (Keycloak, Agentgateway, kagent-tools, Gateways):
 
 ```bash
 helm uninstall kagent-tools -n default
@@ -91,6 +81,8 @@ kubectl delete gateway,httproute,agentgatewaybackend,enterpriseagentgatewaypolic
 kubectl delete namespace keycloak agentgateway-system
 ```
 
----
+## Docs
 
-[AccessLog](https://docs.solo.io/agentgateway/2.1.x/reference/api/solo/#accesslog) · [OBO token exchange](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/obo/) · [MCP + OBO workshop](https://github.com/coryjett/solo-misc-workshops/blob/main/Agentgateway-OIDC-MCP-OBO.md)
+- [AccessLog](https://docs.solo.io/agentgateway/2.1.x/reference/api/solo/#accesslog)
+- [OBO token exchange](https://docs.solo.io/agentgateway/2.1.x/security/obo-elicitations/obo/)
+- [MCP + OBO workshop](https://github.com/coryjett/solo-misc-workshops/blob/main/Agentgateway-OIDC-MCP-OBO.md)

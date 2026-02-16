@@ -1,0 +1,63 @@
+# OpenAI via Agentgateway: Responses API and Chat Completions.
+# Path prefix /openai so that /openai/v1/responses, /openai/v1/chat/completions are routed.
+# Uses passthrough auth so the API key from the client is forwarded to OpenAI.
+#
+# Route types can be set either on the Backend (below) or via an AgentgatewayPolicy
+# that targets the HTTPRoute and sets spec.backend.ai.routes (Backend takes precedence if both set).
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
+metadata:
+  name: openai
+  namespace: default
+spec:
+  ai:
+    provider:
+      openai:
+        model: gpt-4o
+  policies:
+    auth:
+      passthrough: {}
+    ai:
+      routes:
+        "/v1/chat/completions": "Completions"
+        "/v1/responses": "Responses"
+        "*": "Passthrough"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: openai
+  namespace: default
+spec:
+  parentRefs:
+    - name: enterprise-agentgateway
+      namespace: default
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /openai
+      backendRefs:
+        - name: openai
+          namespace: default
+          group: agentgateway.dev
+          kind: AgentgatewayBackend
+---
+# Optional: same route mapping via AgentgatewayPolicy (backend.ai.routes).
+# If routes are set on both Backend and Policy, Backend wins.
+# apiVersion: agentgateway.dev/v1alpha1
+# kind: AgentgatewayPolicy
+# metadata:
+#   name: openai-routes
+#   namespace: default
+# spec:
+#   targetRefs:
+#     - group: gateway.networking.k8s.io
+#       kind: HTTPRoute
+#       name: openai
+#   backend:
+#     ai:
+#       routes:
+#         "/v1/chat/completions": "Completions"
+#         "/v1/responses": "Responses"
+#         "*": "Passthrough"

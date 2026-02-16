@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
@@ -352,6 +353,87 @@ func collectToolNames(payload map[string]any) []string {
 		}
 	}
 	return result
+}
+
+// mcpToolsCall invokes tools/call on the MCP server and returns the text content or error.
+func mcpToolsCall(mcpURL, oboJWT, sessionID, toolName string, args map[string]any) (string, int, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	params := map[string]any{"name": toolName, "arguments": args}
+	if args == nil {
+		params["arguments"] = map[string]any{}
+	}
+	body := map[string]any{
+		"jsonrpc": "2.0",
+		"method":  "tools/call",
+		"params":  params,
+		"id":      1,
+	}
+	bodyBytes, err := json.Marshal(body)
+	if err != nil {
+		return "", 0, err
+	}
+	req, err := http.NewRequest(http.MethodPost, mcpURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", 0, err
+	}
+	if oboJWT != "" {
+		req.Header.Set("Authorization", "Bearer "+oboJWT)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Session-Id", sessionID)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", resp.StatusCode, errors.New("status " + http.StatusText(resp.StatusCode))
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", 0, err
+	}
+	text := strings.TrimSpace(string(data))
+	if strings.HasPrefix(text, "data:") {
+		lines := strings.Split(text, "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), "data:") {
+				text = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "data:"))
+				break
+			}
+		}
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(text), &payload); err != nil {
+		return "", 0, err
+	}
+	if errObj, ok := payload["error"].(map[string]any); ok {
+		msg, _ := errObj["message"].(string)
+		return "", 0, errors.New("mcp tools/call error: " + msg)
+	}
+	result, ok := payload["result"].(map[string]any)
+	if !ok {
+		return "", 0, errors.New("mcp tools/call missing result")
+	}
+	content, ok := result["content"].([]any)
+	if !ok || len(content) == 0 {
+		return "", 0, nil
+	}
+	// First text part
+	for _, c := range content {
+		part, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := part["type"].(string); t == "text" {
+			if s, _ := part["text"].(string); s != "" {
+				return s, 0, nil
+			}
+		}
+	}
+	return "", 0, nil
 }
 
 func decodeRequest(r *http.Request, out any) error {

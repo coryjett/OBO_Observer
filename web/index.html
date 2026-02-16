@@ -71,26 +71,18 @@
           <div class="workflow">
             <h3>Interactive OBO Flow</h3>
             <p class="workflow-help">
-              Log in (top right), then Exchange via STS uses your session token. Call MCP tools/list with the OBO Token.
+              1) Log in (top right) to get a session token. 2) Exchange via STS to get an OBO token. 3) Call MCP tools/list with the OBO Token. Agent Chat (same MCP URL and OBO token, Responses API) is available in the panel.
             </p>
 
             <div class="workflow-config">
-              <details class="workflow-config-details">
-                <summary class="workflow-config-summary">OBO configuration</summary>
-                <div class="workflow-grid">
-                  <label>STS URL <input id="wf-sts-url" value="http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777" placeholder="In-cluster: enterprise-agentgateway.agentgateway-system…" /></label>
-                  <label id="wf-actor-token-label">Actor Token (for delegation) <input id="wf-actor-token" placeholder="Leave empty to use pod service account token" /></label>
-                  <label class="span2">MCP URL <input id="wf-mcp-url" value="http://enterprise-agentgateway.default.svc.cluster.local/mcp" placeholder="In-cluster: enterprise-agentgateway.default…/mcp" /></label>
-                </div>
-              </details>
               <div class="workflow-actions">
                 <span class="workflow-exchange-row">
-                  <button id="wf-step-2" type="button">2) Exchange via STS</button>
                   <label for="wf-exchange-mode" class="workflow-exchange-label">Exchange mode</label>
                   <select id="wf-exchange-mode" class="workflow-exchange-select" aria-label="STS token exchange mode">
                     <option value="delegation" selected>Delegation (subject + actor)</option>
                     <option value="impersonation">Impersonation (subject only)</option>
                   </select>
+                  <button id="wf-step-2" type="button">2) Exchange via STS</button>
                 </span>
                 <span class="workflow-mcp-row">
                   <label for="wf-mcp-token-type" class="workflow-mcp-label">3) Call MCP tools/list</label>
@@ -101,22 +93,47 @@
                   </select>
                   <button id="wf-step-3" type="button">Call</button>
                 </span>
-                <button id="wf-clear-jwts" type="button" class="btn-clear-jwts">Clear Session & OBO Tokens</button>
+                <button id="wf-clear-jwts" type="button" class="btn-clear-jwts">Clear OBO Token</button>
               </div>
-              <div class="workflow-results">
-                <article>
-                  <h4>Session Token</h4>
-                  <pre id="wf-user-jwt">(not generated yet)</pre>
+              <div class="workflow-tokens-wrapper is-collapsed" id="wf-tokens-wrapper">
+                <div class="workflow-tokens-toggle-row">
+                  <button type="button" id="wf-tokens-toggle" class="workflow-tokens-toggle" aria-expanded="false">
+                    Session & OBO tokens <span class="workflow-tokens-toggle-icon" aria-hidden="true">▼</span>
+                  </button>
+                </div>
+                <div class="workflow-results workflow-results--tokens-split" id="wf-tokens-container">
+                <article class="workflow-token-details">
+                  <h4 class="workflow-token-heading">Session Token <span id="wf-session-token-check" class="workflow-token-check" aria-hidden="true"></span></h4>
+                  <div class="workflow-token-body">
+                    <pre id="wf-user-jwt">(not generated yet)</pre>
+                  </div>
                 </article>
-                <article>
-                  <h4>OBO Token</h4>
-                  <pre id="wf-obo-jwt">(not exchanged yet)</pre>
+                <article class="workflow-token-details">
+                  <h4 class="workflow-token-heading">OBO Token <span id="wf-obo-token-check" class="workflow-token-check" aria-hidden="true"></span></h4>
+                  <div class="workflow-token-body">
+                    <pre id="wf-obo-jwt">(not exchanged yet)</pre>
+                  </div>
                 </article>
+                </div>
               </div>
-              <div class="workflow-results workflow-results--tools-below">
-                <article class="span2">
+              <div class="workflow-results workflow-results--tools-split">
+                <article class="workflow-tools-panel">
                   <h4>Tools Response</h4>
                   <pre id="wf-tools">(tools/list not called yet)</pre>
+                </article>
+                <article class="workflow-agent-chat-panel">
+                  <h4>Agent Chat</h4>
+                  <p class="agent-chat-help">Chat with OpenAI using the MCP tools from the connected server (same MCP URL and OBO token as above).</p>
+                  <div class="agent-chat-token-row">
+                    <label for="agent-openai-token">OpenAI API key</label>
+                    <input type="password" id="agent-openai-token" placeholder="sk-…" autocomplete="off" />
+                  </div>
+                  <div id="agent-chat-messages" class="agent-chat-messages" aria-live="polite"></div>
+                  <div class="agent-chat-input-row">
+                    <input type="text" id="agent-chat-input" placeholder="Ask the agent…" aria-label="Agent chat message" />
+                    <button type="button" id="agent-chat-send">Send</button>
+                  </div>
+                  <div id="agent-chat-error" class="agent-chat-error" role="alert"></div>
                 </article>
               </div>
             </div>

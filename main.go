@@ -103,7 +103,13 @@ func runObserverMode(addr string) {
 	mux.HandleFunc("/api/me", handleMe)
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		writeJSON(w, map[string]string{"log_mode": logMode})
+		writeJSON(w, map[string]any{
+			"log_mode":        logMode,
+			"sts_url":         getEnv("STS_URL", "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777"),
+			"mcp_url":         getEnv("MCP_URL", "http://enterprise-agentgateway.default.svc.cluster.local/mcp"),
+			"actor_token":     getEnv("ACTOR_TOKEN", ""),
+			"openai_api_key":  getEnv("OPENAI_API_KEY", ""),
+		})
 	})
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -185,6 +191,7 @@ func runObserverMode(addr string) {
 	mux.HandleFunc("/api/obo/user-jwt", handleUserJWT)
 	mux.HandleFunc("/api/obo/exchange", handleExchange)
 	mux.HandleFunc("/api/obo/mcp-tools", handleMCPTools)
+	mux.HandleFunc("/api/agent-chat", handleAgentChat)
 
 	staticFS, err := fs.Sub(webFS, "web")
 	if err != nil {

@@ -315,5 +315,8 @@ spec:
         mode: Strict
 EOF
 
+echo "Applying OpenAI route (Responses API) for Agent Chat..."
+kubectl apply -f "${SCRIPT_DIR}/k8s/agentgateway-openai-route.yaml"
+
 echo "Demo environment ready."
 echo "Verify: kubectl get pods -n keycloak; kubectl get pods -n agentgateway-system; kubectl get gateway -n agentgateway-system agentgateway-proxy; kubectl get gateway,agentgatewaybackend,httproute -n default"
