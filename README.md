@@ -34,10 +34,12 @@ export AGENTGATEWAY_LICENSE_KEY="<your-license-key>"
 ./demo_env.sh
 ```
 
-Installs Keycloak, Agentgateway, kagent-tools, Gateways, MCP route, and the OpenAI route (Completions + Responses). Overrides: see `.env` (e.g. `KUBE_CONTEXT`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`).
+Installs Keycloak, Agentgateway, kagent-tools, Gateways, MCP route, and the OpenAI route (Completions + Responses).
+
+**Optional:** Copy `.env.example` to `.env` to override defaults (e.g. `KUBE_CONTEXT`, `KEYCLOAK_*`, `KAGENT_TOOLS_VERSION`). The file `.env` is gitignored; use `.env.example` as a reference.
 
 - **Keycloak:** user `testuser` / `testuser`
-- **OBO in UI:** 1) Log in (top right), 2) Exchange via STS, 3) Call MCP tools/list. Agent Chat uses the same MCP URL and OBO token.
+- **OBO in UI:** 1) Log in (top right), 2) Exchange via STS, 3) Call MCP tools/list. Agent Chat uses the workflow OBO token.
 - **Redirect login:** set `KEYCLOAK_URL`, `OAUTH2_*`, `BASE_URL` and add client redirect `{BASE_URL}/auth/callback`.
 
 ## Deploy to Kubernetes
