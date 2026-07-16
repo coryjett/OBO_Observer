@@ -315,8 +315,12 @@ spec:
         mode: Strict
 EOF
 
-echo "Applying OpenAI route (Responses API) for Agent Chat..."
+echo "Applying OpenAI route (Completions + Responses) for Agent Chat..."
 kubectl apply -f "${SCRIPT_DIR}/k8s/agentgateway-openai-route.yaml"
+
+if [ -f "${SCRIPT_DIR}/scripts/ensure-openai-secret-from-env.sh" ]; then
+  "${SCRIPT_DIR}/scripts/ensure-openai-secret-from-env.sh" || true
+fi
 
 echo "Demo environment ready."
 echo "Verify: kubectl get pods -n keycloak; kubectl get pods -n agentgateway-system; kubectl get gateway -n agentgateway-system agentgateway-proxy; kubectl get gateway,agentgatewaybackend,httproute -n default"

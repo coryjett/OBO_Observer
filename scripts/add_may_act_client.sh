@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
-# Add may_act protocol mapper to agw-client so "Exchange via STS" succeeds.
+# Add may_act protocol mapper to a Keycloak client so "Exchange via STS" succeeds.
+# Usage: ./add_may_act_client.sh <CLIENT_ID>
+# Examples:
+#   ./add_may_act_client.sh agw-client
+#   ./add_may_act_client.sh obo-observer
 # Run with Keycloak port-forward active: kubectl port-forward -n keycloak svc/keycloak 8081:8080
 set -euo pipefail
 
+CLIENT_ID="${1:-}"
+if [ -z "${CLIENT_ID}" ]; then
+  echo "Usage: $0 <CLIENT_ID>"
+  echo "Example: $0 agw-client"
+  exit 1
+fi
+
 KEYCLOAK_URL="${KEYCLOAK_URL:-http://localhost:8081}"
 REALM="${KEYCLOAK_REALM:-oidc-realm}"
-CLIENT_ID="${KEYCLOAK_CLIENT_ID:-agw-client}"
 
 ADMIN_TOKEN=$(curl -s -X POST "${KEYCLOAK_URL}/realms/master/protocol/openid-connect/token" \
   -d "username=admin" -d "password=admin" -d "grant_type=password" -d "client_id=admin-cli" | jq -r '.access_token // empty')
@@ -42,4 +52,4 @@ curl -s -X POST "${KEYCLOAK_URL}/admin/realms/${REALM}/clients/${CLIENT_UUID}/pr
       \"userinfo.token.claim\": \"false\"
     }
   }"
-echo "Added may_act mapper to ${CLIENT_ID}. Generate a new User JWT and try Exchange via STS again."
+echo "Added may_act mapper to ${CLIENT_ID}. Generate a new token and try Exchange via STS again."

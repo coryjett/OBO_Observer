@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -30,8 +31,44 @@ func noCacheJS(h http.Handler) http.Handler {
 }
 
 func main() {
+	loadEnvFile(".env")
 	addr := getEnv("HTTP_ADDR", ":8080")
 	runObserverMode(addr)
+}
+
+// loadEnvFile reads KEY=VALUE lines from path (relative to cwd) and sets them in the environment.
+// Skipped: empty lines, lines starting with #. Values may be quoted; existing env vars are not overwritten.
+func loadEnvFile(path string) {
+	if path == "" {
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		idx := strings.Index(line, "=")
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		val := strings.TrimSpace(line[idx+1:])
+		if key == "" {
+			continue
+		}
+		if strings.HasPrefix(val, `"`) && strings.HasSuffix(val, `"`) && len(val) >= 2 {
+			val = strings.Trim(val, `"`)
+		}
+		if os.Getenv(key) == "" {
+			_ = os.Setenv(key, val)
+		}
+	}
 }
 
 func runObserverMode(addr string) {
@@ -62,7 +99,7 @@ func runObserverMode(addr string) {
 		if r, err := NewKubernetesBackendResolver(); err == nil && r != nil {
 			backendResolver = r
 		}
-		clientNS := getEnv("CLIENT_RESOLVE_NAMESPACE", "obo-observer")
+		clientNS := getEnv("CLIENT_RESOLVE_NAMESPACES", getEnv("CLIENT_RESOLVE_NAMESPACE", "*"))
 		if r, err := NewKubernetesClientResolver(clientNS); err == nil && r != nil {
 			clientResolver = r
 		}
@@ -103,12 +140,13 @@ func runObserverMode(addr string) {
 	mux.HandleFunc("/api/me", handleMe)
 	mux.HandleFunc("/api/info", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		openAIKey := getEnv("OPENAI_API_KEY", "")
 		writeJSON(w, map[string]any{
-			"log_mode":        logMode,
-			"sts_url":         getEnv("STS_URL", "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777"),
-			"mcp_url":         getEnv("MCP_URL", "http://enterprise-agentgateway.default.svc.cluster.local/mcp"),
-			"actor_token":     getEnv("ACTOR_TOKEN", ""),
-			"openai_api_key":  getEnv("OPENAI_API_KEY", ""),
+			"log_mode":                  logMode,
+			"sts_url":                   getEnv("STS_URL", "http://enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777"),
+			"mcp_url":                   getEnv("MCP_URL", "http://enterprise-agentgateway.default.svc.cluster.local/mcp"),
+			"actor_token":               getEnv("ACTOR_TOKEN", ""),
+			"openai_api_key_configured": openAIKey != "",
 		})
 	})
 	mux.HandleFunc("/api/events", func(w http.ResponseWriter, r *http.Request) {
@@ -134,12 +172,27 @@ func runObserverMode(addr string) {
 			}
 		}
 
+		// Truncate large header values (e.g. request/response bodies) to keep the
+		// JSON payload small and avoid freezing the browser when it parses/renders.
+		const maxHeaderValueLen = 8000
+		bodyKeys := map[string]bool{
+			"request.body": true, "request_body": true, "body": true,
+			"response.body": true, "response_body": true, "response_body_content": true,
+		}
+		for i := range events {
+			for k, v := range events[i].Headers {
+				if bodyKeys[k] && len(v) > maxHeaderValueLen {
+					events[i].Headers[k] = v[:maxHeaderValueLen] + "… (truncated)"
+				}
+			}
+		}
+
 		writeJSON(w, map[string]any{
 			"events": events,
 		})
 	})
 	mux.HandleFunc("/api/events/clear", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+		if r.Method != http.MethodPost { // POST-only: avoid CSRF/drive-by GET clearing the store
 			http.Error(w, "", http.StatusMethodNotAllowed)
 			return
 		}
@@ -265,7 +318,15 @@ func writeJSON(w http.ResponseWriter, payload any) {
 
 func withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// Restrict CORS to the app's own origin (BASE_URL) rather than "*", so
+		// other sites can't script the API from a victim's browser. Falls back
+		// to "*" only when BASE_URL is unset (dev/observer-only mode).
+		allow := strings.TrimSpace(os.Getenv("BASE_URL"))
+		if allow == "" {
+			allow = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", allow)
+		w.Header().Set("Vary", "Origin")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {

@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha1"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -132,35 +129,12 @@ type KubernetesLogSource struct {
 }
 
 func NewKubernetesLogSource(namespace, labelSelector, container string, tailLines int) (*KubernetesLogSource, error) {
-	host := os.Getenv("KUBERNETES_SERVICE_HOST")
-	port := os.Getenv("KUBERNETES_SERVICE_PORT")
-	if host == "" || port == "" {
+	httpClient, baseURL, token, err := newInClusterHTTPClient()
+	if err != nil {
+		return nil, err
+	}
+	if httpClient == nil {
 		return nil, errors.New("kubernetes service host/port environment variables missing")
-	}
-
-	tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
-	if err != nil {
-		return nil, fmt.Errorf("read serviceaccount token: %w", err)
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-
-	caPath := "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	caBytes, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, fmt.Errorf("read CA cert %s: %w", filepath.Clean(caPath), err)
-	}
-	caPool := x509.NewCertPool()
-	if ok := caPool.AppendCertsFromPEM(caBytes); !ok {
-		return nil, errors.New("failed to append Kubernetes CA cert")
-	}
-
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs: caPool,
-			},
-		},
 	}
 
 	return &KubernetesLogSource{
@@ -169,7 +143,7 @@ func NewKubernetesLogSource(namespace, labelSelector, container string, tailLine
 		container:     container,
 		tailLines:     tailLines,
 		client:        httpClient,
-		baseURL:       "https://" + host + ":" + port,
+		baseURL:       baseURL,
 		token:         token,
 	}, nil
 }

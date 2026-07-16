@@ -54,16 +54,16 @@
           </details>
 
           <details class="headers-details bodies-details" id="bodies-details">
-            <summary class="headers-summary">Bodies</summary>
+            <summary class="headers-summary">Body</summary>
             <p class="headers-help">Request and response body from the access log (when present).</p>
             <div class="headers-split">
               <div class="headers-column">
                 <div class="headers-column-title">Request body</div>
-                <pre id="body-request" class="headers-display body-display">Select a context to view bodies.</pre>
+                <pre id="body-request" class="headers-display body-display">Select a context to view body.</pre>
               </div>
               <div class="headers-column">
                 <div class="headers-column-title">Response body</div>
-                <pre id="body-response" class="headers-display body-display">Select a context to view bodies.</pre>
+                <pre id="body-response" class="headers-display body-display">Select a context to view body.</pre>
               </div>
             </div>
           </details>
@@ -71,7 +71,7 @@
           <div class="workflow">
             <h3>Interactive OBO Flow</h3>
             <p class="workflow-help">
-              1) Log in (top right) to get a session token. 2) Exchange via STS to get an OBO token. 3) Call MCP tools/list with the OBO Token. Agent Chat is available in the panel.
+              1) Log in (top right) to get a session token. 2) Exchange via STS to get an OBO token. 3) Call MCP tools/list with the OBO Token. Agent Chat is available via the bubble in the bottom-left corner.
             </p>
 
             <div class="workflow-config">
@@ -116,24 +116,10 @@
                 </article>
                 </div>
               </div>
-              <div class="workflow-results workflow-results--tools-split">
+              <div class="workflow-results workflow-results--single">
                 <article class="workflow-tools-panel">
                   <h4>Tools Response</h4>
                   <pre id="wf-tools">(tools/list not called yet)</pre>
-                </article>
-                <article class="workflow-agent-chat-panel">
-                  <h4>Agent Chat</h4>
-                  <p class="agent-chat-help">Chat with OpenAI using the MCP tools from the connected server (uses the workflow OBO token).</p>
-                  <div class="agent-chat-token-row">
-                    <label for="agent-openai-token">OpenAI API key</label>
-                    <input type="password" id="agent-openai-token" placeholder="sk-…" autocomplete="off" />
-                  </div>
-                  <div id="agent-chat-messages" class="agent-chat-messages" aria-live="polite"></div>
-                  <div class="agent-chat-input-row">
-                    <input type="text" id="agent-chat-input" placeholder="Ask the agent…" aria-label="Agent chat message" />
-                    <button type="button" id="agent-chat-send">Send</button>
-                  </div>
-                  <div id="agent-chat-error" class="agent-chat-error" role="alert"></div>
                 </article>
               </div>
             </div>
@@ -146,6 +132,33 @@
         </section>
       </section>
     </main>
+
+    <div id="agent-chat-widget" class="agent-chat-widget">
+      <button type="button" id="agent-chat-bubble" class="agent-chat-bubble" aria-label="Open agent chat" aria-expanded="false" title="Agent Chat">
+        <span class="agent-chat-bubble-icon" aria-hidden="true">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="6" width="16" height="12" rx="2"/><circle cx="9" cy="11" r="1"/><circle cx="15" cy="11" r="1"/><path d="M9 15h6"/><path d="M12 6V3"/><circle cx="12" cy="2" r="0.75"/></svg>
+        </span>
+      </button>
+      <div id="agent-chat-panel" class="agent-chat-panel" aria-hidden="true">
+        <div id="agent-chat-resize-handle" class="agent-chat-resize-handle" aria-label="Resize chat window" title="Resize"></div>
+        <div class="agent-chat-panel-header">
+          <h4>Agent Chat</h4>
+          <button type="button" id="agent-chat-close" class="agent-chat-close" aria-label="Close agent chat">×</button>
+        </div>
+        <p class="agent-chat-help">Chat with OpenAI using the MCP tools from the connected server (uses the workflow OBO token).</p>
+        <div class="agent-chat-token-row" id="agent-chat-token-row">
+          <label for="agent-openai-token">OpenAI API key</label>
+          <input type="password" id="agent-openai-token" placeholder="sk-…" autocomplete="off" />
+        </div>
+        <p class="agent-chat-help agent-chat-server-key-note" id="agent-chat-server-key-note" style="display: none;">Using server-configured API key (OPENAI_API_KEY).</p>
+        <div id="agent-chat-messages" class="agent-chat-messages" aria-live="polite"></div>
+        <div class="agent-chat-input-row">
+          <input type="text" id="agent-chat-input" placeholder="Ask the agent…" aria-label="Agent chat message" />
+          <button type="button" id="agent-chat-send">Send</button>
+        </div>
+        <div id="agent-chat-error" class="agent-chat-error" role="alert"></div>
+      </div>
+    </div>
 
     <script src="/app.js" defer></script>
   </body>

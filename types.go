@@ -5,7 +5,7 @@ import "time"
 type Event struct {
 	ID            string            `json:"id"`
 	Timestamp     time.Time         `json:"timestamp"`
-	RawLine       string            `json:"rawLine"`
+	RawLine       string            `json:"-"`
 	Context       string            `json:"context"`
 	InboundJWT    string            `json:"inboundJwt"`
 	ExchangedJWT  string            `json:"exchangedJwt"`

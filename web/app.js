@@ -1,5 +1,10 @@
+// OBO Observer streaming-ui (contexts added one-by-one with delay)
 const POLL_MS = 1500;
+const POLL_FETCH_TIMEOUT_MS = 40000;
+const INFO_FETCH_TIMEOUT_MS = 15000;
 const MAX_CONTEXTS = 120;
+/** Max chars to pretty-print per body; larger bodies are truncated to avoid freezing the UI on first render. */
+const BODY_FORMAT_MAX_CHARS = 8000;
 const STORAGE_KEY_IMPERSONATION_OBO = "obo-observer-impersonation-obo-jwt";
 
 const state = {
@@ -19,7 +24,8 @@ const state = {
     mcpUrl: "",
     actorToken: "",
   },
-  agentChat: { messages: [] },
+  agentChat: { messages: [], inputHistory: [], inputHistoryIndex: -1, inputDraft: "" },
+  openaiApiKeyConfigured: false,
 };
 
 function loadPersistedImpersonationOboJwt() {
@@ -65,10 +71,17 @@ const refs = {
   wfTokensWrapper: document.getElementById("wf-tokens-wrapper"),
   wfExchangeMode: document.getElementById("wf-exchange-mode"),
   agentOpenaiToken: document.getElementById("agent-openai-token"),
+  agentChatTokenRow: document.getElementById("agent-chat-token-row"),
+  agentChatServerKeyNote: document.getElementById("agent-chat-server-key-note"),
   agentChatMessages: document.getElementById("agent-chat-messages"),
   agentChatInput: document.getElementById("agent-chat-input"),
   agentChatSend: document.getElementById("agent-chat-send"),
   agentChatError: document.getElementById("agent-chat-error"),
+  agentChatWidget: document.getElementById("agent-chat-widget"),
+  agentChatBubble: document.getElementById("agent-chat-bubble"),
+  agentChatPanel: document.getElementById("agent-chat-panel"),
+  agentChatClose: document.getElementById("agent-chat-close"),
+  agentChatResizeHandle: document.getElementById("agent-chat-resize-handle"),
 };
 
 /** Check session: set state.user and session token in Session Token from /api/me (no redirect). */
@@ -120,43 +133,95 @@ function updateTokenCheckmarks() {
   }
 }
 
+function setStatusFromHealthy() {
+  if (!refs.status) return;
+  refs.status.className = `status ${state.healthy ? "status-ok" : "status-warn"}`;
+  const modeLabel = state.logMode === "kubernetes" ? " (Agentgateway)" : state.logMode === "file" ? " (file)" : state.logMode === "sample" ? " (Sample)" : "";
+  refs.status.textContent = state.healthy ? "Live" + modeLabel : refs.status.textContent || "Disconnected";
+}
+
 async function fetchLogMode() {
   try {
-    const res = await fetch("/api/info", { cache: "no-store" });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), INFO_FETCH_TIMEOUT_MS);
+    const res = await fetch("/api/info", { cache: "no-store", signal: controller.signal });
+    clearTimeout(timeoutId);
     if (res.ok) {
       const data = await res.json();
       state.logMode = data.log_mode || null;
       if (data.sts_url != null) state.workflow.stsUrl = data.sts_url;
       if (data.mcp_url != null) state.workflow.mcpUrl = data.mcp_url;
       if (data.actor_token != null) state.workflow.actorToken = data.actor_token;
-      if (data.openai_api_key && refs.agentOpenaiToken && !refs.agentOpenaiToken.value.trim()) {
-        refs.agentOpenaiToken.value = data.openai_api_key;
-      }
+      state.openaiApiKeyConfigured = !!data.openai_api_key_configured;
+      if (refs.agentChatTokenRow) refs.agentChatTokenRow.style.display = state.openaiApiKeyConfigured ? "none" : "block";
+      if (refs.agentChatServerKeyNote) refs.agentChatServerKeyNote.style.display = state.openaiApiKeyConfigured ? "block" : "none";
+      state.healthy = true;
+      setStatusFromHealthy();
+    } else if (refs.status && refs.status.textContent === "Connecting...") {
+      state.healthy = false;
+      refs.status.className = "status status-warn";
+      refs.status.textContent = "Disconnected (backend error)";
     }
   } catch (_) {
     state.logMode = null;
+    if (!state.healthy && refs.status) {
+      state.healthy = false;
+      refs.status.className = "status status-warn";
+      refs.status.textContent = "Disconnected (backend unreachable)";
+    }
   }
 }
 
+let renderPending = false;
+
 async function poll() {
   try {
-    const response = await fetch("/api/events?limit=200", { cache: "no-store" });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), POLL_FETCH_TIMEOUT_MS);
+    const response = await fetch("/api/events?limit=200", { cache: "no-store", signal: controller.signal });
+    clearTimeout(timeoutId);
     if (!response.ok) {
       throw new Error(`status ${response.status}`);
     }
 
-    const payload = await response.json();
-    state.events = (payload.events || []).slice(0, MAX_CONTEXTS);
-    state.healthy = true;
-    if (state.logMode === null) {
-      await fetchLogMode();
-    }
-    render();
+    const text = await response.text();
+    await new Promise((resolve) => {
+      scheduleIdle(() => {
+        try {
+          const payload = JSON.parse(text);
+          const newEvents = (payload.events || []).slice(0, MAX_CONTEXTS);
+          const oldLen = state.events.length;
+          const oldFirstId = state.events[0] && state.events[0].id;
+          state.events = newEvents;
+          state.healthy = true;
+          if (state.logMode === null) {
+            fetchLogMode();
+          }
+          const eventsChanged = newEvents.length !== oldLen || (newEvents[0] && newEvents[0].id !== oldFirstId);
+          if (eventsChanged) {
+            if (renderInProgress) {
+              renderPending = true;
+            } else {
+              requestAnimationFrame(() => render());
+            }
+          }
+        } catch (_) {
+          state.healthy = false;
+          state.logMode = null;
+          if (refs.status) {
+            refs.status.className = "status status-warn";
+            refs.status.textContent = "Disconnected (parse error)";
+          }
+        }
+        resolve();
+      }, { timeout: 80 });
+    });
   } catch (error) {
     state.healthy = false;
     state.logMode = null;
     refs.status.className = "status status-warn";
-    refs.status.textContent = `Disconnected (${error.message})`;
+    const msg = error.name === "AbortError" ? "request timeout" : error.message;
+    refs.status.textContent = `Disconnected (${msg})`;
   }
 }
 
@@ -198,7 +263,19 @@ function startLogStream() {
   };
 }
 
+function scheduleIdle(cb, opts) {
+  if (typeof requestIdleCallback !== "undefined") {
+    return requestIdleCallback(cb, opts || { timeout: 100 });
+  }
+  return setTimeout(cb, 0);
+}
+
+let renderInProgress = false;
+
 function render() {
+  if (renderInProgress) return;
+  renderInProgress = true;
+
   refs.status.className = `status ${state.healthy ? "status-ok" : "status-warn"}`;
   const modeLabel = state.logMode === "kubernetes" ? " (Agentgateway)" : state.logMode === "file" ? " (file)" : state.logMode === "sample" ? " (Sample)" : "";
   refs.status.textContent = state.healthy ? "Live" + modeLabel : "Disconnected";
@@ -212,9 +289,24 @@ function render() {
     state.selectedId = selected.id;
   }
 
-  renderContexts(selected);
-  renderTokens(selected);
-  renderTrace(selected);
+  function done() {
+    renderInProgress = false;
+    if (renderPending) {
+      renderPending = false;
+      render();
+    }
+  }
+
+  requestAnimationFrame(() => {
+    renderContexts(selected);
+    requestAnimationFrame(() => {
+      renderTokens(selected);
+      requestAnimationFrame(() => {
+        renderTrace(selected);
+        done();
+      });
+    });
+  });
 }
 
 function isHttpEvent(event) {
@@ -229,57 +321,77 @@ function isHttpEvent(event) {
   return false;
 }
 
-function renderContexts(selected) {
-  refs.contextList.innerHTML = "";
-  const httpEvents = state.events.filter(isHttpEvent);
-
-  for (const event of httpEvents) {
-    const li = document.createElement("li");
-    if (selected && selected.id === event.id) {
-      li.className = "selected";
-    }
-
-    const button = document.createElement("button");
-    button.type = "button";
-    button.addEventListener("click", () => {
-      state.selectedId = event.id;
-      render();
-    });
-    const inboundToken = event.inboundJwt && String(event.inboundJwt).trim();
-    const usedObo = inboundToken && isOboToken(inboundToken);
-    const usedUserJwt = inboundToken && !usedObo;
-    const usedImpersonation = usedUserJwt && isImpersonationContext(event);
-    const openAIContext = isOpenAIContext(event);
-    const badge = usedObo
-      ? '<span class="obo-jwt-badge">OBO Token</span>'
-      : openAIContext && inboundToken
-        ? '<span class="openai-api-badge">OpenAI API key</span>'
-        : usedImpersonation
-          ? '<span class="impersonation-jwt-badge">Impersonation JWT</span>'
-          : usedUserJwt
-            ? '<span class="jwt-badge">Session Token</span>'
-            : '';
-    let timeStr = "";
-    if (event.timestamp) {
-      const d = new Date(event.timestamp);
-      if (!Number.isNaN(d.getTime())) {
-        timeStr = d.toLocaleTimeString();
-      }
-    }
-    button.innerHTML = `
-      <div class="path-row">
-        <span class="path">${escapeHtml(event.context || "(context missing)")}</span>
-      </div>
-      <div class="small">${escapeHtml(event.resolvedClient || event.client || "unknown source")} → ${escapeHtml(event.resolvedBackendService || formatBackendDisplay(event.backendTarget) || event.route || "unknown destination")}</div>
-      <div class="context-footer">
-        <span class="small context-time">${escapeHtml(timeStr || "—")}</span>
-        ${badge}
-      </div>
-    `;
-
-    li.appendChild(button);
-    refs.contextList.appendChild(li);
+function buildContextListItem(event, selected) {
+  const li = document.createElement("li");
+  if (selected && selected.id === event.id) {
+    li.className = "selected";
   }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.addEventListener("click", () => {
+    state.selectedId = event.id;
+    render();
+  });
+  const inboundToken = event.inboundJwt && String(event.inboundJwt).trim();
+  const usedObo = inboundToken && isOboToken(inboundToken);
+  const usedUserJwt = inboundToken && !usedObo;
+  const usedImpersonation = usedUserJwt && isImpersonationContext(event);
+  const openAIContext = isOpenAIContext(event);
+  const badge = usedObo
+    ? '<span class="obo-jwt-badge">OBO Token</span>'
+    : openAIContext && inboundToken
+      ? '<span class="openai-api-badge">OpenAI API key</span>'
+      : usedImpersonation
+        ? '<span class="impersonation-jwt-badge">Impersonation JWT</span>'
+        : usedUserJwt
+          ? '<span class="jwt-badge">Session Token</span>'
+          : '';
+  let timeStr = "";
+  if (event.timestamp) {
+    const d = new Date(event.timestamp);
+    if (!Number.isNaN(d.getTime())) {
+      timeStr = d.toLocaleTimeString();
+    }
+  }
+  button.innerHTML = `
+    <div class="path-row">
+      <span class="path">${escapeHtml(event.context || "(context missing)")}</span>
+    </div>
+    <div class="small">${escapeHtml(event.resolvedClient || event.client || "unknown source")} → ${escapeHtml(event.resolvedBackendService || formatBackendDisplay(event.backendTarget) || event.route || "unknown destination")}</div>
+    <div class="context-footer">
+      <span class="small context-time">${escapeHtml(timeStr || "—")}</span>
+      ${badge}
+    </div>
+  `;
+  li.appendChild(button);
+  return li;
+}
+
+/** Fingerprint of event IDs from the last full context-list build. */
+let _lastContextIds = "";
+
+function renderContexts(selected) {
+  const httpEvents = state.events.filter(isHttpEvent);
+  const ids = httpEvents.map(e => e.id).join(",");
+  const selectedId = selected ? selected.id : null;
+
+  if (ids === _lastContextIds) {
+    // Events unchanged — just update the selection highlight.
+    const items = refs.contextList.children;
+    for (let i = 0; i < items.length; i++) {
+      items[i].className = (i < httpEvents.length && httpEvents[i].id === selectedId) ? "selected" : "";
+    }
+    return;
+  }
+
+  // Full rebuild needed.
+  _lastContextIds = ids;
+  const frag = document.createDocumentFragment();
+  for (const event of httpEvents) {
+    frag.appendChild(buildContextListItem(event, selected));
+  }
+  refs.contextList.innerHTML = "";
+  refs.contextList.appendChild(frag);
 }
 
 /** Get first header value by key (checks multiple possible keys, case-insensitive). */
@@ -297,16 +409,26 @@ function getHeaderValue(headers, keys) {
 /** Try to decode base64 to UTF-8 string. Returns decoded string or null if not valid base64. */
 function tryDecodeBase64(s) {
   if (typeof s !== "string" || s.length === 0) return null;
-  const trimmed = s.trim();
-  if (!/^[A-Za-z0-9+/]*=*$/.test(trimmed) || trimmed.length % 4 === 1) return null;
-  try {
-    const binary = atob(trimmed);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-  } catch (_) {
-    return null;
+  // Body may arrive as whitespace-separated base64 tokens (MIME-wrapped, or one
+  // frame per streamed SSE chunk). Decode each token and concatenate. Also
+  // tolerate base64url (- _). Any non-base64 token means this isn't base64.
+  const tokens = s.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return null;
+  const b64 = /^[A-Za-z0-9+/_-]*=*$/;
+  let out = "";
+  for (const tok of tokens) {
+    if (!b64.test(tok) || tok.length % 4 === 1) return null;
+    const norm = tok.replace(/-/g, "+").replace(/_/g, "/");
+    try {
+      const binary = atob(norm);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      out += new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    } catch (_) {
+      return null;
+    }
   }
+  return out;
 }
 
 /** Fallback: add newlines and indentation to JSON-like text when parse fails (best effort, skips inside strings). */
@@ -382,6 +504,16 @@ function prettyPrintJsonLike(str) {
 /** Strip SSE/data-stream style prefix (e.g. "data: ") so the remainder can be parsed as JSON. */
 function stripDataPrefix(str) {
   const t = str.trim();
+  // SSE stream: collect every `data:` line payload (skip event:/id:/comments),
+  // join them (a JSON-RPC result spans one or more data lines). Falls back to a
+  // simple single-prefix strip.
+  if (/(^|\n)\s*data:/i.test(t)) {
+    const payloads = t
+      .split(/\r?\n/)
+      .filter((l) => /^\s*data:/i.test(l))
+      .map((l) => l.replace(/^\s*data:\s?/i, ""));
+    if (payloads.length) return payloads.join("").trim();
+  }
   if (/^data:\s*/i.test(t)) return t.replace(/^data:\s*/i, "").trim();
   return str;
 }
@@ -395,6 +527,12 @@ function formatBodyDisplay(raw) {
   const decoded = tryDecodeBase64(s);
   if (decoded != null) s = decoded;
   s = stripDataPrefix(s);
+  let truncateNote = "";
+  if (s.length > BODY_FORMAT_MAX_CHARS) {
+    const origLen = s.length;
+    s = s.slice(0, BODY_FORMAT_MAX_CHARS);
+    truncateNote = "\n\n… (truncated for display; " + (origLen - BODY_FORMAT_MAX_CHARS) + " more chars)";
+  }
   function tryPrettyJson(str) {
     try {
       const parsed = JSON.parse(str);
@@ -405,27 +543,27 @@ function formatBodyDisplay(raw) {
   }
   // Try parse first (handles valid minified JSON without touching it)
   let out = tryPrettyJson(s);
-  if (out != null) return out;
+  if (out != null) return out + truncateNote;
   // Unescape literal \n, \t, \r so single-line JSON from logs parses; handle escaped backslashes
   s = s.replace(/\\\\/g, "\u0000").replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\r/g, "\r").replace(/\u0000/g, "\\");
   out = tryPrettyJson(s);
-  if (out != null) return out;
+  if (out != null) return out + truncateNote;
   // Fix common invalid JSON: trailing comma before ] or }
   const fixed = s.replace(/,\s*([\]}])/g, "$1");
   out = tryPrettyJson(fixed);
-  if (out != null) return out;
+  if (out != null) return out + truncateNote;
   // Unwrap and pretty-print: handle double/triple encoded JSON strings
   let current = fixed;
   for (let depth = 0; depth < 5; depth++) {
     out = tryPrettyJson(current);
-    if (out != null) return out;
+    if (out != null) return out + truncateNote;
     try {
       const parsed = JSON.parse(current);
       if (typeof parsed === "string") {
         current = parsed.trim();
         continue;
       }
-      return JSON.stringify(parsed, null, 2);
+      return JSON.stringify(parsed, null, 2) + truncateNote;
     } catch (_) {
       break;
     }
@@ -433,14 +571,14 @@ function formatBodyDisplay(raw) {
   // Fallback: if it looks like JSON (starts with { or [), apply best-effort pretty print
   const trimmed = current.trim();
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-    return prettyPrintJsonLike(current);
+    return prettyPrintJsonLike(current) + truncateNote;
   }
-  return s;
+  return s + truncateNote;
 }
 
 function renderTokens(selected) {
   const emptyMsg = "Select a context to view headers.";
-  const bodyEmptyMsg = "Select a context to view bodies.";
+  const bodyEmptyMsg = "Select a context to view body.";
   if (!selected?.headers) {
     if (refs.headersRequestDisplay) refs.headersRequestDisplay.textContent = emptyMsg;
     if (refs.headersResponseDisplay) refs.headersResponseDisplay.textContent = emptyMsg;
@@ -476,6 +614,31 @@ const TRACE_VIEW_WIDTH = 900;
 const TRACE_VIEW_HEIGHT = 170;
 const EMPTY_VIEW_WIDTH = 400;
 const EMPTY_VIEW_HEIGHT = 120;
+
+/** Extract MCP method/tool from event request body (JSON-RPC). Returns e.g. "tools/list", "tools/call: my_tool", or null. */
+function getMcpToolLabel(event) {
+  if (!event?.headers) return null;
+  const raw = getHeaderValue(event.headers, ["request.body", "request_body", "body"]);
+  if (!raw || raw.length > 20000) return null;
+  let s = raw.trim();
+  const decoded = tryDecodeBase64(s);
+  if (decoded != null) s = decoded;
+  try {
+    const obj = typeof s === "string" ? JSON.parse(s) : s;
+    if (!obj || typeof obj !== "object") return null;
+    const method = obj.method;
+    if (typeof method !== "string" || !method) return null;
+    if (method === "tools/list") return "tools/list";
+    if (method === "tools/call") {
+      const name = obj.params && typeof obj.params.name === "string" ? obj.params.name : "";
+      return name ? "tools/call: " + name : "tools/call";
+    }
+    if (/^tools\./.test(method)) return method.replace(/^tools\./, "tools/");
+    return null;
+  } catch (_) {
+    return null;
+  }
+}
 
 function setTracePanelSize(width, height) {
   const wrap = refs.traceGraphWrap;
@@ -525,10 +688,23 @@ function renderTrace(selected) {
     }
   }
 
-  // ViewBox centered on nodes (y=130); equal padding above and below
+  const mcpToolLabel = getMcpToolLabel(selected);
+  if (mcpToolLabel && nodes[2]) {
+    const toolText = document.createElementNS("http://www.w3.org/2000/svg", "text");
+    toolText.setAttribute("x", String(nodes[2].x));
+    toolText.setAttribute("y", "198");
+    toolText.setAttribute("text-anchor", "middle");
+    toolText.setAttribute("font-size", "12");
+    toolText.setAttribute("fill", "#98b0d7");
+    toolText.setAttribute("class", "trace-mcp-tool-label");
+    toolText.textContent = mcpToolLabel;
+    svg.appendChild(toolText);
+  }
+
+  // ViewBox: room for nodes (y=130) and optional tool label below (y=198)
   const nodeCenterY = 130;
-  const viewBoxH = 170;
-  const viewBoxY = nodeCenterY - viewBoxH / 2; // 45 -> show y 45..215, nodes 88..172
+  const viewBoxH = mcpToolLabel ? 185 : 170;
+  const viewBoxY = nodeCenterY - 85; // show from 45 so label at 198 is visible when viewBoxH=185
   svg.setAttribute("viewBox", `0 ${viewBoxY} ${TRACE_VIEW_WIDTH} ${viewBoxH}`);
   setTracePanelSize(TRACE_VIEW_WIDTH, viewBoxH);
 }
@@ -680,9 +856,6 @@ function isEventBlocked(event) {
       if ((val === "401" || val === "403") && (key.includes("status") || key.includes("code"))) return true;
     }
   }
-  const raw = String(event.rawLine || "");
-  if (/http\.status=(401|403)|response_code=(401|403)|status=(401|403)|http_status=(401|403)/.test(raw)) return true;
-  if (/\s(401|403)\s|^(401|403)\s|\s(401|403)$/.test(raw)) return true;
   return false;
 }
 
@@ -780,12 +953,12 @@ function formatJwtDisplay(rawToken, fallbackLabel) {
   return rawToken;
 }
 
-/** Keys to omit from the Headers section (shown only in Bodies). */
+/** Keys to omit from the Headers section (shown only in Body). */
 const BODY_HEADER_KEYS = new Set([
   "request.body", "request_body", "response.body", "response_body", "response_body_content", "body",
 ].map((s) => s.toLowerCase()));
 
-/** Split parsed log attributes into request (left) vs response (right). Response keys: status, duration, error, etc. Omits body keys (shown in Bodies section). */
+/** Split parsed log attributes into request (left) vs response (right). Response keys: status, duration, error, etc. Omits body keys (shown in Body section). */
 function splitRequestResponseHeaders(headers) {
   const requestHeaders = {};
   const responseHeaders = {};
@@ -937,6 +1110,7 @@ async function callMCPTools(tokenType) {
         ? `Calling MCP with ${label}...`
         : `Calling MCP with ${label} (none set — expect 401)...`
   );
+  await new Promise((r) => setTimeout(r, 0));
   try {
     const payload = await postJSON("/api/obo/mcp-tools", {
       mcpUrl: input.mcpUrl,
@@ -945,11 +1119,23 @@ async function callMCPTools(tokenType) {
       useUserJwt,
     });
 
+    setWorkflowStatus("Step 3 complete: MCP tools listed.");
+    setWorkflowBusy(false);
     const tools = Array.isArray(payload.tools) ? payload.tools : [];
     const toolsText = tools.length ? tools.join("\n") : "(no tools returned)";
-    const rawText = JSON.stringify(payload.raw || {}, null, 2);
-    refs.wfTools.textContent = `Tools:\n${toolsText}\n\nRaw:\n${rawText}`;
-    setWorkflowStatus("Step 3 complete: MCP tools listed.");
+    requestAnimationFrame(() => {
+      let rawText = "";
+      try {
+        rawText = JSON.stringify(payload.raw || {});
+      } catch (_) {
+        rawText = String(payload.raw || "");
+      }
+      const maxRaw = 6000;
+      if (rawText.length > maxRaw) {
+        rawText = rawText.slice(0, maxRaw) + "\n\n… (truncated, " + (rawText.length - maxRaw) + " chars)";
+      }
+      refs.wfTools.textContent = `Tools:\n${toolsText}\n\nRaw:\n${rawText}`;
+    });
   } catch (error) {
     if (error.status === 403 || (error.payload && error.payload.blockedByPolicy)) {
       state.workflow.blockedByPolicy = true;
@@ -965,13 +1151,9 @@ async function callMCPTools(tokenType) {
     refs.wfTools.textContent = `Error: ${error.message}\n\n${hint}`;
   } finally {
     setWorkflowBusy(false);
-    // Refresh once, then again after a short delay so the new request has time to show up in logs
-    await poll();
-    selectMostRecentContext();
-    setTimeout(async () => {
-      await poll();
-      selectMostRecentContext();
-    }, 2000);
+    setTimeout(() => {
+      poll().then(() => requestAnimationFrame(() => selectMostRecentContext()));
+    }, 0);
   }
 }
 
@@ -980,7 +1162,7 @@ function selectMostRecentContext() {
   const mostRecent = httpEvents.length > 0 ? httpEvents[0] : state.events[0];
   if (mostRecent) {
     state.selectedId = mostRecent.id;
-    render();
+    requestAnimationFrame(() => render());
   }
 }
 
@@ -1006,6 +1188,7 @@ async function handleContextsClear() {
     if (!response.ok) return;
     state.events = [];
     state.selectedId = null;
+    _lastContextIds = "";
     render();
   } catch (_) {}
 }
@@ -1016,16 +1199,60 @@ function updateExchangeModeUI() {
   updateTokenCheckmarks();
 }
 
+/** Escape HTML and apply simple formatting: line breaks before numbered list items, **bold**. */
+function formatAgentMessageContent(text) {
+  const raw = (text || "").trim();
+  if (!raw) return "";
+  const escaped = raw
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+  let out = escaped
+    .replace(/\n/g, "<br>")
+    .replace(/: 1\. /g, ":<br><br>1. ");
+  for (let n = 2; n <= 99; n++) {
+    out = out.replace(new RegExp(" " + n + "\\. ", "g"), "<br><br>" + n + ". ");
+  }
+  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  return out;
+}
+
 function renderAgentChat() {
   if (!refs.agentChatMessages) return;
   refs.agentChatMessages.innerHTML = "";
   for (const m of state.agentChat.messages) {
-    const div = document.createElement("div");
-    div.className = "agent-chat-message agent-chat-message--" + m.role;
-    const label = m.role === "user" ? "You" : "Assistant";
-    div.textContent = label + ": " + (m.content || "").trim();
-    refs.agentChatMessages.appendChild(div);
+    const wrap = document.createElement("div");
+    wrap.className = "agent-chat-message agent-chat-message--" + m.role;
+    const label = document.createElement("span");
+    label.className = "agent-chat-message-label";
+    label.textContent = m.role === "user" ? "You:" : "Assistant:";
+    const body = document.createElement("div");
+    body.className = "agent-chat-message-body";
+    body.innerHTML = formatAgentMessageContent(m.content);
+    wrap.appendChild(label);
+    wrap.appendChild(body);
+    refs.agentChatMessages.appendChild(wrap);
   }
+  refs.agentChatMessages.scrollTop = refs.agentChatMessages.scrollHeight;
+}
+
+function appendAgentChatTypingIndicator() {
+  if (!refs.agentChatMessages) return;
+  const wrap = document.createElement("div");
+  wrap.className = "agent-chat-message agent-chat-message--assistant agent-chat-typing";
+  wrap.setAttribute("aria-live", "polite");
+  const label = document.createElement("span");
+  label.className = "agent-chat-message-label";
+  label.textContent = "Assistant:";
+  const body = document.createElement("div");
+  body.className = "agent-chat-message-body agent-chat-typing-dots";
+  body.setAttribute("aria-hidden", "true");
+  body.innerHTML = "<span></span><span></span><span></span>";
+  wrap.appendChild(label);
+  wrap.appendChild(body);
+  refs.agentChatMessages.appendChild(wrap);
   refs.agentChatMessages.scrollTop = refs.agentChatMessages.scrollHeight;
 }
 
@@ -1040,15 +1267,21 @@ async function handleAgentChatSend() {
     if (errEl) errEl.textContent = "Set MCP_URL in .env and restart the app.";
     return;
   }
-  const openaiKey = (refs.agentOpenaiToken && refs.agentOpenaiToken.value || "").trim();
-  if (!openaiKey) {
-    if (errEl) errEl.textContent = "Enter your OpenAI API key first.";
+  const openaiKey = (state.openaiApiKeyConfigured ? "" : (refs.agentOpenaiToken && refs.agentOpenaiToken.value || "")).trim();
+  if (!state.openaiApiKeyConfigured && !openaiKey) {
+    if (errEl) errEl.textContent = "Enter your OpenAI API key first (or set OPENAI_API_KEY server-side).";
     return;
   }
   if (errEl) errEl.textContent = "";
   state.agentChat.messages.push({ role: "user", content: msg });
+  const history = state.agentChat.inputHistory || [];
+  if (history[history.length - 1] !== msg) history.push(msg);
+  state.agentChat.inputHistory = history;
+  state.agentChat.inputHistoryIndex = -1;
+  state.agentChat.inputDraft = "";
   if (input) input.value = "";
   renderAgentChat();
+  appendAgentChatTypingIndicator();
   if (sendBtn) sendBtn.disabled = true;
   try {
     const payload = await postJSON("/api/agent-chat", {
@@ -1087,7 +1320,91 @@ function initWorkflow() {
   if (refs.agentChatSend) refs.agentChatSend.addEventListener("click", handleAgentChatSend);
   if (refs.agentChatInput) {
     refs.agentChatInput.addEventListener("keydown", function (e) {
-      if (e.key === "Enter") handleAgentChatSend();
+      if (e.key === "Enter") {
+        handleAgentChatSend();
+        return;
+      }
+      const history = state.agentChat.inputHistory || [];
+      if (history.length === 0) return;
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (state.agentChat.inputHistoryIndex === -1) {
+          state.agentChat.inputDraft = refs.agentChatInput.value;
+          state.agentChat.inputHistoryIndex = history.length - 1;
+          refs.agentChatInput.value = history[state.agentChat.inputHistoryIndex];
+        } else if (state.agentChat.inputHistoryIndex > 0) {
+          state.agentChat.inputHistoryIndex--;
+          refs.agentChatInput.value = history[state.agentChat.inputHistoryIndex];
+        }
+        return;
+      }
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (state.agentChat.inputHistoryIndex === -1) return;
+        state.agentChat.inputHistoryIndex++;
+        if (state.agentChat.inputHistoryIndex >= history.length) {
+          state.agentChat.inputHistoryIndex = -1;
+          refs.agentChatInput.value = state.agentChat.inputDraft || "";
+        } else {
+          refs.agentChatInput.value = history[state.agentChat.inputHistoryIndex];
+        }
+        return;
+      }
+    });
+  }
+  if (refs.agentChatBubble) {
+    refs.agentChatBubble.addEventListener("click", function () {
+      const isOpen = refs.agentChatWidget && refs.agentChatWidget.classList.contains("is-open");
+      if (isOpen) {
+        if (refs.agentChatWidget) refs.agentChatWidget.classList.remove("is-open");
+        if (refs.agentChatPanel) refs.agentChatPanel.setAttribute("aria-hidden", "true");
+        if (refs.agentChatBubble) {
+          refs.agentChatBubble.setAttribute("aria-expanded", "false");
+          refs.agentChatBubble.setAttribute("aria-label", "Open agent chat");
+        }
+      } else {
+        if (refs.agentChatWidget) refs.agentChatWidget.classList.add("is-open");
+        if (refs.agentChatPanel) refs.agentChatPanel.setAttribute("aria-hidden", "false");
+        if (refs.agentChatBubble) {
+          refs.agentChatBubble.setAttribute("aria-expanded", "true");
+          refs.agentChatBubble.setAttribute("aria-label", "Close agent chat");
+        }
+      }
+    });
+  }
+  if (refs.agentChatClose) {
+    refs.agentChatClose.addEventListener("click", function () {
+      if (refs.agentChatWidget) refs.agentChatWidget.classList.remove("is-open");
+      if (refs.agentChatPanel) refs.agentChatPanel.setAttribute("aria-hidden", "true");
+      if (refs.agentChatBubble) refs.agentChatBubble.setAttribute("aria-expanded", "false");
+    });
+  }
+  if (refs.agentChatResizeHandle && refs.agentChatPanel) {
+    refs.agentChatResizeHandle.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      const panel = refs.agentChatPanel;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startW = panel.offsetWidth;
+      const startH = panel.offsetHeight;
+      const minW = 280;
+      const maxW = Math.min(window.innerWidth - 40, 800);
+      const minH = 200;
+      const maxH = Math.min(480, window.innerHeight - 100);
+      function onMove(e) {
+        const dx = e.clientX - startX;
+        const dy = e.clientY - startY;
+        const w = Math.max(minW, Math.min(maxW, startW - dx));
+        const h = Math.max(minH, Math.min(maxH, startH - dy));
+        panel.style.width = w + "px";
+        panel.style.height = h + "px";
+      }
+      function onUp() {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      }
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
     });
   }
 }
@@ -1098,11 +1415,16 @@ if (refs.contextsClear) {
 
 (async function init() {
   await checkAuth();
-  await fetchLogMode();
   loadPersistedImpersonationOboJwt();
   initWorkflow();
   updateTokenCheckmarks();
+  fetchLogMode();
   poll();
   setInterval(poll, POLL_MS);
   startLogStream();
+  setTimeout(function connectingHint() {
+    if (refs.status && refs.status.textContent === "Connecting..." && !state.healthy) {
+      refs.status.textContent = "Connecting… (check backend)";
+    }
+  }, 4000);
 })();

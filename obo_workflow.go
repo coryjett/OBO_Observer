@@ -12,6 +12,11 @@ import (
 	"time"
 )
 
+const (
+	httpTimeoutDefault  = 20 * time.Second
+	httpTimeoutToolCall = 30 * time.Second
+)
+
 type userJWTRequest struct {
 	KeycloakURL  string `json:"keycloakUrl"`
 	Realm        string `json:"realm"`
@@ -44,6 +49,10 @@ func handleUserJWT(w http.ResponseWriter, r *http.Request) {
 
 	if req.KeycloakURL == "" || req.Realm == "" || req.ClientID == "" || req.ClientSecret == "" || req.Username == "" || req.Password == "" {
 		writeError(w, http.StatusBadRequest, "missing required fields")
+		return
+	}
+	if !allowedUpstream(req.KeycloakURL) {
+		writeError(w, http.StatusBadRequest, "keycloakUrl host not allowed")
 		return
 	}
 
@@ -95,6 +104,10 @@ func handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.STSURL == "" || userJWT == "" {
 		writeError(w, http.StatusBadRequest, "missing required fields (STS URL and user token; login first or provide userJwt)")
+		return
+	}
+	if !allowedUpstream(req.STSURL) {
+		writeError(w, http.StatusBadRequest, "stsUrl host not allowed")
 		return
 	}
 
@@ -164,6 +177,10 @@ func handleMCPTools(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "missing mcpUrl")
 		return
 	}
+	if !allowedUpstream(req.MCPURL) {
+		writeError(w, http.StatusBadRequest, "mcpUrl host not allowed")
+		return
+	}
 
 	var token string
 	if req.UseUserJWT && strings.TrimSpace(req.UserJWT) != "" {
@@ -213,8 +230,29 @@ func handleMCPTools(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// allowedUpstream reports whether a user-supplied URL targets a host on the
+// SSRF allowlist. Prevents an authenticated caller from pointing STS/MCP/Keycloak
+// requests at arbitrary in-cluster addresses. Override the default set with the
+// ALLOWED_UPSTREAM_HOSTS env (comma-separated host or host:port).
+func allowedUpstream(rawURL string) bool {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	def := "keycloak.keycloak.svc.cluster.local:8080,keycloak.cjett.net," +
+		"enterprise-agentgateway.agentgateway-system.svc.cluster.local:7777," +
+		"enterprise-agentgateway.default.svc.cluster.local"
+	for _, a := range strings.Split(getEnv("ALLOWED_UPSTREAM_HOSTS", def), ",") {
+		a = strings.TrimSpace(a)
+		if a != "" && (a == u.Host || a == u.Hostname()) {
+			return true
+		}
+	}
+	return false
+}
+
 func postForm(endpoint string, form url.Values, authHeader string) ([]byte, int, error) {
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: httpTimeoutDefault}
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, 0, err
@@ -235,7 +273,7 @@ func postForm(endpoint string, form url.Values, authHeader string) ([]byte, int,
 }
 
 func initializeMCP(mcpURL, oboJWT string) (string, int, error) {
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: httpTimeoutDefault}
 	body := `{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"obo-observer","version":"1.0"}},"id":1}`
 	req, err := http.NewRequest(http.MethodPost, mcpURL, strings.NewReader(body))
 	if err != nil {
@@ -263,7 +301,7 @@ func initializeMCP(mcpURL, oboJWT string) (string, int, error) {
 }
 
 func mcpNotificationInitialized(mcpURL, oboJWT, sessionID string) error {
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: httpTimeoutDefault}
 	body := `{"jsonrpc":"2.0","method":"notifications/initialized"}`
 	req, err := http.NewRequest(http.MethodPost, mcpURL, strings.NewReader(body))
 	if err != nil {
@@ -288,7 +326,7 @@ func mcpNotificationInitialized(mcpURL, oboJWT, sessionID string) error {
 }
 
 func mcpToolsList(mcpURL, oboJWT, sessionID string) (map[string]any, int, error) {
-	client := &http.Client{Timeout: 20 * time.Second}
+	client := &http.Client{Timeout: httpTimeoutDefault}
 	body := `{"jsonrpc":"2.0","method":"tools/list","id":2}`
 	req, err := http.NewRequest(http.MethodPost, mcpURL, strings.NewReader(body))
 	if err != nil {
@@ -357,7 +395,7 @@ func collectToolNames(payload map[string]any) []string {
 
 // mcpToolsCall invokes tools/call on the MCP server and returns the text content or error.
 func mcpToolsCall(mcpURL, oboJWT, sessionID, toolName string, args map[string]any) (string, int, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: httpTimeoutToolCall}
 	params := map[string]any{"name": toolName, "arguments": args}
 	if args == nil {
 		params["arguments"] = map[string]any{}

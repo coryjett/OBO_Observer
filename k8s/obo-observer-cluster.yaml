@@ -1,0 +1,153 @@
+# OBO Observer — generic Kubernetes deployment (real, multi-node cluster).
+#
+# Unlike k8s/obo-observer.yaml (k3d/kind demo: locally-imported image, port-forward),
+# this manifest pulls a registry image and exposes the app via a Service type you choose
+# (LoadBalancer by default — e.g. MetalLB/cloud LB). It reads access logs from whatever
+# agentgateway data plane you point it at, so it works on any cluster, not just the demo.
+#
+# This file uses ${VARS}; render + apply with scripts/deploy-k8s.sh (which runs envsubst),
+# or:  export IMAGE=... GATEWAY_NAMESPACE=... ; envsubst < this-file | kubectl apply -f -
+#
+# Variables (defaults in scripts/deploy-k8s.sh):
+#   IMAGE                   container image, e.g. docker.io/you/obo-observer:latest
+#   IMAGE_PULL_POLICY       Always | IfNotPresent
+#   SERVICE_TYPE            LoadBalancer | ClusterIP | NodePort
+#   GATEWAY_NAMESPACE       namespace of the agentgateway data-plane pods (log source)
+#   GATEWAY_LABEL_SELECTOR  label selector for those pods
+#   CLIENT_RESOLVE_NAMESPACES  "*" (all ns) or comma-separated list
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obo-observer
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: obo-observer
+  namespace: obo-observer
+---
+# Resolve client IP (src.addr) -> workload name across all namespaces (Contexts/Trace).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obo-observer-pods-list-all
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obo-observer-pods-list-all
+subjects:
+  - kind: ServiceAccount
+    name: obo-observer
+    namespace: obo-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obo-observer-pods-list-all
+---
+# Read proxy access logs from the gateway data-plane pods (log source).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obo-observer-logs-reader
+  namespace: ${GATEWAY_NAMESPACE}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obo-observer-logs-reader
+  namespace: ${GATEWAY_NAMESPACE}
+subjects:
+  - kind: ServiceAccount
+    name: obo-observer
+    namespace: obo-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obo-observer-logs-reader
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obo-observer
+  namespace: obo-observer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: obo-observer
+  template:
+    metadata:
+      labels:
+        app: obo-observer
+    spec:
+      serviceAccountName: obo-observer
+      containers:
+        - name: obo-observer
+          image: ${IMAGE}
+          imagePullPolicy: ${IMAGE_PULL_POLICY}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: LOG_MODE
+              value: kubernetes
+            # Log source: the agentgateway data plane to observe.
+            - name: K8S_NAMESPACE
+              value: "${GATEWAY_NAMESPACE}"
+            - name: K8S_POD_LABEL_SELECTOR
+              value: "${GATEWAY_LABEL_SELECTOR}"
+            - name: K8S_TAIL_LINES
+              value: "500"
+            - name: EVENT_BUFFER_SIZE
+              value: "800"
+            - name: CLIENT_RESOLVE_NAMESPACES
+              value: "${CLIENT_RESOLVE_NAMESPACES}"
+            # --- Interactive OBO flow (login/STS/MCP tools) & Agent Chat: OPTIONAL ---
+            # These need external services (Keycloak, an OpenAI-compatible gateway route)
+            # that a generic cluster may not have. Leave unset to run Observer-only
+            # (Contexts / Trace / headers all work). To enable, set these to values
+            # reachable from the browser (BASE_URL, KEYCLOAK_URL) and in-cluster
+            # (KEYCLOAK_INTERNAL_URL, OPENAI_BASE_URL), and register the OAuth redirect
+            # ${BASE_URL}/auth/callback in your IdP. See README.
+            - name: BASE_URL
+              value: "${BASE_URL}"
+            - name: KEYCLOAK_URL
+              value: "${KEYCLOAK_URL}"
+            - name: KEYCLOAK_INTERNAL_URL
+              value: "${KEYCLOAK_INTERNAL_URL}"
+            - name: KEYCLOAK_REALM
+              value: "${KEYCLOAK_REALM}"
+            - name: OAUTH2_CLIENT_ID
+              value: "${OAUTH2_CLIENT_ID}"
+            - name: OAUTH2_CLIENT_SECRET
+              value: "${OAUTH2_CLIENT_SECRET}"
+            - name: OPENAI_BASE_URL
+              value: "${OPENAI_BASE_URL}"
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: obo-observer-openai
+                  key: OPENAI_API_KEY
+                  optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: obo-observer
+  namespace: obo-observer
+spec:
+  type: ${SERVICE_TYPE}
+  selector:
+    app: obo-observer
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP

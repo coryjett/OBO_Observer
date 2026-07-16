@@ -42,22 +42,3 @@ spec:
           namespace: default
           group: agentgateway.dev
           kind: AgentgatewayBackend
----
-# Optional: same route mapping via AgentgatewayPolicy (backend.ai.routes).
-# If routes are set on both Backend and Policy, Backend wins.
-# apiVersion: agentgateway.dev/v1alpha1
-# kind: AgentgatewayPolicy
-# metadata:
-#   name: openai-routes
-#   namespace: default
-# spec:
-#   targetRefs:
-#     - group: gateway.networking.k8s.io
-#       kind: HTTPRoute
-#       name: openai
-#   backend:
-#     ai:
-#       routes:
-#         "/v1/chat/completions": "Completions"
-#         "/v1/responses": "Responses"
-#         "*": "Passthrough"

@@ -1,10 +1,13 @@
-FROM golang:1.22-alpine AS builder
+# Run the builder on the NATIVE build platform and cross-compile to the target arch.
+# Without --platform=$BUILDPLATFORM, buildx pulls the builder image for the *target*
+# arch and runs it under QEMU — on Apple Silicon building linux/amd64 this crashes
+# `go mod download` (SIGSEGV). Cross-compiling natively (GOARCH below) avoids emulation.
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 WORKDIR /src
 
-# Use build platform (e.g. arm64 on Apple Silicon) so the binary matches the cluster.
 ARG TARGETARCH
 
-COPY go.mod ./
+COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .

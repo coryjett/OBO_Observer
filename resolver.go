@@ -14,6 +14,41 @@ import (
 	"time"
 )
 
+// newInClusterHTTPClient builds an HTTP client configured for in-cluster Kubernetes API access.
+// Returns the client, base URL (e.g. "https://10.0.0.1:443"), and bearer token.
+// Returns nil, "", "", nil when not running in a cluster (missing env vars or service-account files).
+func newInClusterHTTPClient() (*http.Client, string, string, error) {
+	host := os.Getenv("KUBERNETES_SERVICE_HOST")
+	port := os.Getenv("KUBERNETES_SERVICE_PORT")
+	if host == "" || port == "" {
+		return nil, "", "", nil
+	}
+
+	tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return nil, "", "", nil
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+
+	caBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+	if err != nil {
+		return nil, "", "", nil
+	}
+	caPool := x509.NewCertPool()
+	if !caPool.AppendCertsFromPEM(caBytes) {
+		return nil, "", "", fmt.Errorf("failed to append Kubernetes CA cert")
+	}
+
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: caPool},
+		},
+	}
+
+	return httpClient, "https://" + host + ":" + port, token, nil
+}
+
 // BackendResolver resolves a backend target (e.g. "default/mcp-backend") to the actual
 // Kubernetes service (e.g. "default/kagent-tools") by looking up AgentgatewayBackend resources.
 type BackendResolver interface {
@@ -54,38 +89,17 @@ type agentgatewayBackendList struct {
 // NewKubernetesBackendResolver builds an in-cluster Kubernetes client and returns a resolver.
 // Returns nil if not running in a cluster (missing env or token).
 func NewKubernetesBackendResolver() (*KubernetesBackendResolver, error) {
-	host := os.Getenv("KUBERNETES_SERVICE_HOST")
-	port := os.Getenv("KUBERNETES_SERVICE_PORT")
-	if host == "" || port == "" {
-		return nil, nil
-	}
-
-	tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	httpClient, baseURL, token, err := newInClusterHTTPClient()
 	if err != nil {
+		return nil, err
+	}
+	if httpClient == nil {
 		return nil, nil
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-
-	caPath := "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	caBytes, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, nil
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("failed to append Kubernetes CA cert")
-	}
-
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: caPool},
-		},
 	}
 
 	return &KubernetesBackendResolver{
 		client:  httpClient,
-		baseURL: "https://" + host + ":" + port,
+		baseURL: baseURL,
 		token:   token,
 		cache:   make(map[string]string),
 	}, nil
@@ -159,22 +173,24 @@ func (r *KubernetesBackendResolver) fetchBackend(ctx context.Context, namespace,
 	return namespace + "/" + firstSegment
 }
 
-// KubernetesClientResolver resolves client IP (e.g. from src.addr) to an app name by
-// listing pods in the configured namespace and matching status.podIP.
+// KubernetesClientResolver resolves client IP (e.g. from src.addr) to a workload name by
+// listing pods in the configured namespaces and matching status.podIP.
 type KubernetesClientResolver struct {
-	client    *http.Client
-	baseURL   string
-	token     string
-	namespace string
-	mu        sync.RWMutex
-	cache     map[string]string
+	client        *http.Client
+	baseURL       string
+	token         string
+	namespaces    []string
+	allNamespaces bool // when true, list /api/v1/pods (cluster-wide)
+	mu            sync.RWMutex
+	cache         map[string]string
 }
 
 type podList struct {
 	Items []struct {
 		Metadata struct {
-			Labels map[string]string `json:"labels"`
-			Name   string            `json:"name"`
+			Namespace string            `json:"namespace"`
+			Labels    map[string]string `json:"labels"`
+			Name      string            `json:"name"`
 		} `json:"metadata"`
 		Status struct {
 			PodIP string `json:"podIP"`
@@ -183,42 +199,41 @@ type podList struct {
 }
 
 // NewKubernetesClientResolver builds an in-cluster client that resolves client IPs to
-// pod app labels in the given namespace (e.g. obo-observer). Returns nil if not in cluster.
-func NewKubernetesClientResolver(namespace string) (*KubernetesClientResolver, error) {
-	if namespace == "" {
+// workload names (namespace/app or namespace/pod) by listing pods.
+// namespaces: "*" = list pods in all namespaces (cluster-scoped); otherwise comma-separated (e.g. "obo-observer,default").
+// Returns nil if not in cluster or namespaces is empty.
+func NewKubernetesClientResolver(namespaces string) (*KubernetesClientResolver, error) {
+	raw := strings.TrimSpace(namespaces)
+	if raw == "" {
 		return nil, nil
 	}
-	host := os.Getenv("KUBERNETES_SERVICE_HOST")
-	port := os.Getenv("KUBERNETES_SERVICE_PORT")
-	if host == "" || port == "" {
-		return nil, nil
+	allNamespaces := raw == "*"
+	var list []string
+	if !allNamespaces {
+		for _, p := range strings.Split(raw, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" && p != "*" {
+				list = append(list, p)
+			}
+		}
+		if len(list) == 0 {
+			return nil, nil
+		}
 	}
-	tokenBytes, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	httpClient, baseURL, token, err := newInClusterHTTPClient()
 	if err != nil {
+		return nil, err
+	}
+	if httpClient == nil {
 		return nil, nil
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-	caPath := "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
-	caBytes, err := os.ReadFile(caPath)
-	if err != nil {
-		return nil, nil
-	}
-	caPool := x509.NewCertPool()
-	if !caPool.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("failed to append Kubernetes CA cert")
-	}
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: caPool},
-		},
 	}
 	return &KubernetesClientResolver{
-		client:    httpClient,
-		baseURL:   "https://" + host + ":" + port,
-		token:     token,
-		namespace: namespace,
-		cache:     make(map[string]string),
+		client:        httpClient,
+		baseURL:       baseURL,
+		token:         token,
+		namespaces:    list,
+		allNamespaces: allNamespaces,
+		cache:         make(map[string]string),
 	}, nil
 }
 
@@ -250,7 +265,56 @@ func (r *KubernetesClientResolver) ResolveClient(ctx context.Context, clientAddr
 }
 
 func (r *KubernetesClientResolver) lookupPodByIP(ctx context.Context, podIP string) string {
-	path := fmt.Sprintf("/api/v1/namespaces/%s/pods", url.PathEscape(r.namespace))
+	if r.allNamespaces {
+		return r.lookupPodAllNamespaces(ctx, podIP)
+	}
+	for _, ns := range r.namespaces {
+		if name := r.lookupPodInNamespace(ctx, ns, podIP); name != "" {
+			return ns + "/" + name
+		}
+	}
+	return ""
+}
+
+func (r *KubernetesClientResolver) lookupPodAllNamespaces(ctx context.Context, podIP string) string {
+	path := "/api/v1/pods"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+path, nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Authorization", "Bearer "+r.token)
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var list podList
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
+		return ""
+	}
+	for _, pod := range list.Items {
+		if pod.Status.PodIP == podIP {
+			ns := pod.Metadata.Namespace
+			if ns == "" {
+				ns = "default"
+			}
+			name := pod.Metadata.Name
+			if app, ok := pod.Metadata.Labels["app.kubernetes.io/name"]; ok && app != "" {
+				name = app
+			} else if app, ok := pod.Metadata.Labels["app"]; ok && app != "" {
+				name = app
+			}
+			return ns + "/" + name
+		}
+	}
+	return ""
+}
+
+func (r *KubernetesClientResolver) lookupPodInNamespace(ctx context.Context, namespace, podIP string) string {
+	path := fmt.Sprintf("/api/v1/namespaces/%s/pods", url.PathEscape(namespace))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.baseURL+path, nil)
 	if err != nil {
 		return ""
@@ -271,10 +335,12 @@ func (r *KubernetesClientResolver) lookupPodByIP(ctx context.Context, podIP stri
 	for _, pod := range list.Items {
 		if pod.Status.PodIP == podIP {
 			name := pod.Metadata.Name
-			if app, ok := pod.Metadata.Labels["app"]; ok && app != "" {
+			if app, ok := pod.Metadata.Labels["app.kubernetes.io/name"]; ok && app != "" {
+				name = app
+			} else if app, ok := pod.Metadata.Labels["app"]; ok && app != "" {
 				name = app
 			}
-			return r.namespace + "/" + name
+			return name
 		}
 	}
 	return ""

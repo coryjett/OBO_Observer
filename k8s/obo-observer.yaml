@@ -34,6 +34,29 @@ metadata:
   name: obo-observer
   namespace: obo-observer
 ---
+# List pods in all namespaces to resolve client IP (src.addr) to workload name in Contexts/Trace
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obo-observer-pods-list-all
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obo-observer-pods-list-all
+subjects:
+  - kind: ServiceAccount
+    name: obo-observer
+    namespace: obo-observer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obo-observer-pods-list-all
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -132,9 +155,16 @@ spec:
               value: "obo-observer-secret"
             - name: BASE_URL
               value: "http://localhost:8080"
-            # Agent Chat: Responses API via gateway (path /openai)
+            # Agent Chat: Completions API via gateway (path /openai)
             - name: OPENAI_BASE_URL
               value: "http://enterprise-agentgateway.default.svc.cluster.local/openai"
+            # Optional: server-side OpenAI key (hides key field in UI). See .env.example; demo_env.sh can create secret from .env.
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: obo-observer-openai
+                  key: OPENAI_API_KEY
+                  optional: true
 ---
 apiVersion: v1
 kind: Service

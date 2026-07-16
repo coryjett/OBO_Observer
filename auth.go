@@ -328,7 +328,35 @@ func randomString(n int) string {
 	return string(b)
 }
 
+// requireAuth gates all data/action endpoints behind a valid login session.
+// Reachable WITHOUT a session: the OAuth flow (/login, /auth/*), the k8s health
+// probe, the lightweight UI-bootstrap endpoints (/api/me, /api/info), and static
+// assets (so the login page can render). Every other /api/* endpoint — contexts,
+// logs, OBO exchange, MCP tools, agent-chat — returns 401 until the user logs in,
+// so nothing is leaked to unauthenticated callers.
+// When OAuth is NOT configured (observer-only/dev mode) gating is disabled; do
+// NOT expose such a deployment to the internet.
 func requireAuth(next http.Handler) http.Handler {
-	return next
+	openExact := map[string]bool{
+		"/api/healthz": true,
+		"/api/me":      true,
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _, oauthEnabled := getOAuth2Config()
+		p := r.URL.Path
+		if !oauthEnabled ||
+			p == "/login" || strings.HasPrefix(p, "/auth/") ||
+			openExact[p] || !strings.HasPrefix(p, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if getSessionToken(r) == "" {
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusUnauthorized)
+			writeJSON(w, map[string]string{"error": "authentication required"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 

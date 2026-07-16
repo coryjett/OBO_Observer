@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-	"time"
 )
 
 type agentChatRequest struct {
@@ -75,7 +74,10 @@ func handleAgentChat(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKey := strings.TrimSpace(req.OpenAIAPIKey)
 	if apiKey == "" {
-		writeError(w, http.StatusBadRequest, "openaiApiKey is required")
+		apiKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	}
+	if apiKey == "" {
+		writeError(w, http.StatusBadRequest, "openaiApiKey is required (or set OPENAI_API_KEY server-side)")
 		return
 	}
 	message := strings.TrimSpace(req.Message)
@@ -88,6 +90,10 @@ func handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "mcpUrl is required")
 		return
 	}
+	if !allowedUpstream(mcpURL) {
+		writeError(w, http.StatusBadRequest, "mcpUrl host not allowed")
+		return
+	}
 	oboToken := strings.TrimSpace(req.OBOToken)
 
 	openAIBase := strings.TrimRight(strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")), "/")
@@ -95,7 +101,7 @@ func handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		openAIBase = "https://api.openai.com"
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: httpTimeoutToolCall}
 
 	var tools []completionTool
 	var sessionID string
@@ -233,133 +239,6 @@ func handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusBadGateway, "too many tool-call rounds")
-}
-
-// schemaOrBoolKeys: values for these must be schema object or boolean, not the string "object".
-var schemaOrBoolKeys = map[string]bool{
-	"additionalProperties": true, "additional_properties": true,
-	"items": true, "contains": true, "propertyNames": true,
-	"not": true, "contentSchema": true,
-}
-
-// isObjectOrBooleanString returns true if s is "object" or "boolean" (case-insensitive).
-func isObjectOrBooleanString(s string) bool {
-	return strings.EqualFold(s, "object") || strings.EqualFold(s, "boolean")
-}
-
-// normalizeToolSchema ensures object schemas have "properties" and fixes string "object" where object/boolean required.
-func normalizeToolSchema(input map[string]any) map[string]any {
-	if input == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}}
-	}
-	out := make(map[string]any)
-	for k, v := range input {
-		out[k] = normalizeSchemaValue(k, v)
-	}
-	if _, hasType := out["type"]; !hasType {
-		out["type"] = "object"
-	}
-	if out["type"] == "object" {
-		if _, hasProps := out["properties"]; !hasProps {
-			out["properties"] = map[string]any{}
-		}
-	}
-	// Post-pass: replace any remaining string "object"/"boolean" (except under "type" or "enum").
-	return deepFixObjectBooleanStrings(out).(map[string]any)
-}
-
-// deepFixObjectBooleanStrings walks v and replaces string "object"/"boolean" with a schema when key is not "type"/"enum".
-func deepFixObjectBooleanStrings(v any) any {
-	return deepFixObjectBooleanStringsWithKey("", v)
-}
-
-func deepFixObjectBooleanStringsWithKey(key string, v any) any {
-	if key != "type" && key != "enum" && key != "required" {
-		if s, ok := v.(string); ok && isObjectOrBooleanString(s) {
-			return map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-	}
-	switch x := v.(type) {
-	case map[string]any:
-		out := make(map[string]any)
-		for k, val := range x {
-			out[k] = deepFixObjectBooleanStringsWithKey(k, val)
-		}
-		return out
-	case []any:
-		arr := make([]any, len(x))
-		for i, item := range x {
-			arr[i] = deepFixObjectBooleanStringsWithKey(key, item)
-		}
-		return arr
-	default:
-		return v
-	}
-}
-
-func normalizeSchemaValue(key string, v any) any {
-	if schemaOrBoolKeys[key] {
-		if s, ok := v.(string); ok && isObjectOrBooleanString(s) {
-			return map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-	}
-	if key != "type" && key != "enum" {
-		if s, ok := v.(string); ok && isObjectOrBooleanString(s) {
-			return map[string]any{"type": "object", "properties": map[string]any{}}
-		}
-	}
-	switch x := v.(type) {
-	case map[string]any:
-		return normalizeToolSchema(x)
-	case []any:
-		arr := make([]any, len(x))
-		for i, item := range x {
-			arr[i] = normalizeSchemaValue("", item)
-		}
-		return arr
-	default:
-		return v
-	}
-}
-
-// minimalSafeParameters returns a schema with only type, properties, and required. Never sends string "object"/"boolean" as a value.
-func minimalSafeParameters(schema map[string]any) map[string]any {
-	emptyObj := map[string]any{"type": "object", "properties": map[string]any{}}
-	if schema == nil {
-		return emptyObj
-	}
-	out := make(map[string]any)
-	if t, ok := schema["type"]; ok {
-		if _, isStr := t.(string); isStr {
-			out["type"] = t
-		} else {
-			out["type"] = "object"
-		}
-	} else {
-		out["type"] = "object"
-	}
-	if out["type"] == "object" {
-		props, _ := schema["properties"].(map[string]any)
-		if props == nil {
-			out["properties"] = map[string]any{}
-		} else {
-			cleanProps := make(map[string]any)
-			for k, v := range props {
-				if sub, ok := v.(map[string]any); ok {
-					cleanProps[k] = minimalSafeParameters(sub)
-				} else if s, ok := v.(string); ok && isObjectOrBooleanString(s) {
-					cleanProps[k] = emptyObj
-				} else {
-					cleanProps[k] = v
-				}
-			}
-			out["properties"] = cleanProps
-		}
-	}
-	if req, ok := schema["required"].([]any); ok && len(req) > 0 {
-		out["required"] = req
-	}
-	return out
 }
 
 func convertMcpToCompletionsTools(payload map[string]any) []completionTool {

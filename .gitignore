@@ -1,2 +1,3 @@
 .env
-obo-observer
+/obo-observer
+.DS_Store
