@@ -409,26 +409,53 @@ function getHeaderValue(headers, keys) {
 /** Try to decode base64 to UTF-8 string. Returns decoded string or null if not valid base64. */
 function tryDecodeBase64(s) {
   if (typeof s !== "string" || s.length === 0) return null;
-  // Body may arrive as whitespace-separated base64 tokens (MIME-wrapped, or one
-  // frame per streamed SSE chunk). Decode each token and concatenate. Also
-  // tolerate base64url (- _). Any non-base64 token means this isn't base64.
-  const tokens = s.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return null;
   const b64 = /^[A-Za-z0-9+/_-]*=*$/;
+  const decodeOne = (tok) => {
+    const norm = tok.replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(norm);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  };
+  // Reject a decode that came out mostly non-text: binary/gzip payloads, or a
+  // false positive where a plain word happened to be valid base64 characters.
+  const isMostlyText = (str) => {
+    if (!str) return false;
+    const n = Math.min(str.length, 4096);
+    let bad = 0;
+    for (let i = 0; i < n; i++) {
+      const c = str.charCodeAt(i);
+      if (c === 0xfffd || c < 0x09 || (c > 0x0d && c < 0x20)) bad++;
+    }
+    return bad / n < 0.05;
+  };
+  // Strategy 1: one logical base64 blob wrapped across lines at an arbitrary
+  // width (MIME wrap, or a <pre> visually wrapping one long line). Strip ALL
+  // whitespace and decode the concatenation — the only correct way when a line
+  // can end mid-quantum (per-line atob would garble or bail on those).
+  const joined = s.replace(/\s+/g, "");
+  if (joined.length > 0 && joined.length % 4 !== 1 && b64.test(joined)) {
+    try {
+      const out = decodeOne(joined);
+      if (isMostlyText(out)) return out;
+    } catch (_) {
+      /* fall through to per-frame */
+    }
+  }
+  // Strategy 2: whitespace-separated INDEPENDENT base64 frames (one per streamed
+  // SSE chunk, each base64'd on its own). Decode each and concatenate.
+  const tokens = s.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length <= 1) return null;
   let out = "";
   for (const tok of tokens) {
     if (!b64.test(tok) || tok.length % 4 === 1) return null;
-    const norm = tok.replace(/-/g, "+").replace(/_/g, "/");
     try {
-      const binary = atob(norm);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      out += new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+      out += decodeOne(tok);
     } catch (_) {
       return null;
     }
   }
-  return out;
+  return isMostlyText(out) ? out : null;
 }
 
 /** Fallback: add newlines and indentation to JSON-like text when parse fails (best effort, skips inside strings). */
